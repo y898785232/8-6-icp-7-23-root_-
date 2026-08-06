@@ -1,9 +1,6 @@
 /*
- * ESP32 温度传感器发射端（适配 ICP 前端 door_ 协议）
- * - DS18B20 测温
- * - MQTT 上报 JSON 到 door/{deviceId}/status
- * - 订阅 door/{deviceId}/cmd，收到 STATUS 立即上报
- * - 可选：通过 LoRa 同步发给网关
+ * ESP32-C3 温度传感器（适配 ICP 前端 door_ 协议）
+ * 板子：ESP32-C3FH4
  */
 
 #include <WiFi.h>
@@ -15,50 +12,41 @@
 #include <HardwareSerial.h>
 #include <ArduinoJson.h>
 
-// ===================== 引脚（按你的板子改） =====================
-#define ONE_WIRE_BUS  4     // DS18B20 数据线 GPIO4
-#define LORA_RX       16    // 接 LoRa 模块 TX
-#define LORA_TX       17    // 接 LoRa 模块 RX
-#define LORA_M0       18
-#define LORA_M1       19
+// ========== ESP32-C3 可用引脚 ==========
+#define ONE_WIRE_BUS  4     // DS18B20
+#define LORA_RX       6     // 接 LoRa TX
+#define LORA_TX       7     // 接 LoRa RX
+#define LORA_M0       5
+#define LORA_M1       10    // 不要用 8/9（启动脚）
 
-// ===================== MQTT（和前端一致） =====================
 const char* mqtt_server = "b7fea2bf.ala.asia-southeast1.emqxsl.com";
 const uint16_t mqtt_port = 8883;
 const char* mqtt_user   = "eps8266nn";
 const char* mqtt_pass   = "yu155414";
 
-// ===================== 全局 =====================
-HardwareSerial LoRaSerial(1);   // UART1
+HardwareSerial LoRaSerial(1);
 WiFiClientSecure secureClient;
 PubSubClient mqttClient(secureClient);
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
 
-String deviceId;
-String topicCmd;
-String topicStatus;
+String deviceId, topicCmd, topicStatus;
 
-const unsigned long SAMPLE_INTERVAL = 60000UL;  // 60秒采样一次
-unsigned long lastSample = 0;
-unsigned long convStart  = 0;
+const unsigned long SAMPLE_INTERVAL = 60000UL;
+unsigned long lastSample = 0, convStart = 0;
 bool convPending = false;
-
 float latestTemp = 0.0;
 bool sensorOk = false;
 
-// ===================== LoRa 正常模式 =====================
 void setLoRaMode() {
   pinMode(LORA_M0, OUTPUT);
   pinMode(LORA_M1, OUTPUT);
   digitalWrite(LORA_M0, LOW);
   digitalWrite(LORA_M1, LOW);
-  delay(100);
+  delay(50);
 }
 
-// ===================== 生成设备 ID =====================
 String makeDeviceId() {
-  // 用 MAC 后 3 字节，得到类似 door_a1b2c3
   uint64_t mac = ESP.getEfuseMac();
   uint32_t id  = (uint32_t)(mac & 0xFFFFFF);
   char buf[16];
@@ -66,40 +54,30 @@ String makeDeviceId() {
   return String("door_") + String(buf);
 }
 
-// ===================== 发布状态 JSON（前端可解析） =====================
 void publishStatus(bool online) {
   if (!mqttClient.connected()) return;
 
   StaticJsonDocument<256> doc;
-  doc["online"]    = online;
+  doc["online"] = online;
   doc["sensor_ok"] = sensorOk;
-  doc["unit"]      = "°C";
-  doc["id"]        = deviceId;
-
-  if (sensorOk) {
-    doc["temperature"] = latestTemp;
-  } else {
-    doc["temperature"] = nullptr;
-  }
+  doc["unit"] = "°C";
+  doc["id"] = deviceId;
+  if (sensorOk) doc["temperature"] = latestTemp;
+  else doc["temperature"] = nullptr;
 
   char payload[256];
   serializeJson(doc, payload);
-  mqttClient.publish(topicStatus.c_str(), payload, true);  // retain
+  mqttClient.publish(topicStatus.c_str(), payload, true);
   Serial.printf("MQTT → %s : %s\n", topicStatus.c_str(), payload);
 }
 
-// ===================== 通过 LoRa 发给网关 =====================
 void sendLoRaData() {
   StaticJsonDocument<160> doc;
-  doc["id"]  = deviceId;
-  doc["ok"]  = sensorOk;
-  doc["ts"]  = millis() / 1000;
-
-  if (sensorOk) {
-    doc["temp"] = latestTemp;
-  } else {
-    doc["temp"] = nullptr;
-  }
+  doc["id"] = deviceId;
+  doc["ok"] = sensorOk;
+  doc["ts"] = millis() / 1000;
+  if (sensorOk) doc["temp"] = latestTemp;
+  else doc["temp"] = nullptr;
 
   char json[180];
   serializeJson(doc, json);
@@ -107,41 +85,29 @@ void sendLoRaData() {
   Serial.printf("LoRa → %s\n", json);
 }
 
-// ===================== MQTT 收到指令 =====================
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   String command;
-  for (unsigned int i = 0; i < length; i++) {
-    command += (char)payload[i];
-  }
+  for (unsigned int i = 0; i < length; i++) command += (char)payload[i];
   command.trim();
   Serial.printf("收到指令: %s\n", command.c_str());
-
   if (command == "STATUS") {
     sendLoRaData();
     publishStatus(true);
   }
 }
 
-// ===================== 温度转换完成 =====================
 void finishConversion() {
   convPending = false;
   latestTemp = sensors.getTempCByIndex(0);
-
   sensorOk = (latestTemp > -55.0 && latestTemp < 125.0 && !isnan(latestTemp));
 
-  if (sensorOk) {
-    Serial.printf("温度: %.2f °C\n", latestTemp);
-  } else {
-    Serial.println("DS18B20 读取失败");
-  }
+  if (sensorOk) Serial.printf("温度: %.2f °C\n", latestTemp);
+  else Serial.println("DS18B20 读取失败");
 
   sendLoRaData();
-  if (mqttClient.connected()) {
-    publishStatus(true);
-  }
+  if (mqttClient.connected()) publishStatus(true);
 }
 
-// ===================== 连接 MQTT =====================
 void reconnectMQTT() {
   if (mqttClient.connected()) return;
   if (WiFi.status() != WL_CONNECTED) return;
@@ -156,56 +122,52 @@ void reconnectMQTT() {
   }
 }
 
-// ===================== setup =====================
 void setup() {
   Serial.begin(115200);
-  delay(500);
-  Serial.println("\nESP32 温度传感器启动中...");
+  delay(2000);
+  Serial.println();
+  Serial.println("ESP32-C3 温度传感器启动...");
 
-  // LoRa 串口
-  LoRaSerial.begin(9600, SERIAL_8N1, LORA_RX, LORA_TX);
   setLoRaMode();
+  Serial.println("1 OK: LoRa pins");
 
-  // 设备 ID 与主题（和前端一致）
-  deviceId    = makeDeviceId();
-  topicCmd    = "door/" + deviceId + "/cmd";
+  LoRaSerial.begin(9600, SERIAL_8N1, LORA_RX, LORA_TX);
+  Serial.println("2 OK: LoRa serial");
+
+  deviceId = makeDeviceId();
+  topicCmd = "door/" + deviceId + "/cmd";
   topicStatus = "door/" + deviceId + "/status";
+  Serial.println("3 OK: " + deviceId);
+  Serial.println("   CMD: " + topicCmd);
+  Serial.println("   STATUS: " + topicStatus);
 
-  Serial.println("Device ID : " + deviceId);
-  Serial.println("CMD Topic : " + topicCmd);
-  Serial.println("STATUS Topic: " + topicStatus);
-
-  // WiFi 配网（AP 名：TEMP_SENSOR_ESP32）
   WiFiManager wifiManager;
-  // wifiManager.resetSettings();  // 需要重新配网时打开
+  // wifiManager.resetSettings();  // 重新配网时打开这行
+  Serial.println("4: 进入 WiFi 配网...");
   if (!wifiManager.autoConnect("TEMP_SENSOR_ESP32")) {
-    Serial.println("WiFi 配网失败，重启");
+    Serial.println("WiFi 失败，重启");
     delay(2000);
     ESP.restart();
   }
-  Serial.println("WiFi 已连接: " + WiFi.localIP().toString());
+  Serial.println("5 OK: WiFi " + WiFi.localIP().toString());
 
-  // MQTT
-  secureClient.setInsecure();   // 测试用；生产可换成正式证书
+  secureClient.setInsecure();
   mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setCallback(mqttCallback);
   mqttClient.setBufferSize(512);
   reconnectMQTT();
+  Serial.println("6 OK: MQTT init");
 
-  // DS18B20
   sensors.begin();
   sensors.setResolution(12);
   sensors.setWaitForConversion(false);
-
   sensors.requestTemperatures();
-  convStart  = millis();
+  convStart = millis();
   convPending = true;
   lastSample = millis();
-
-  Serial.println("启动完成，等待温度转换...");
+  Serial.println("7 OK: 启动完成");
 }
 
-// ===================== loop =====================
 void loop() {
   if (WiFi.status() == WL_CONNECTED) {
     if (!mqttClient.connected()) {
@@ -221,20 +183,17 @@ void loop() {
 
   unsigned long now = millis();
 
-  // 非阻塞等待 DS18B20 转换完成（约 750ms）
   if (convPending && (now - convStart >= 900)) {
     finishConversion();
   }
 
-  // 定时采样
   if (!convPending && (now - lastSample >= SAMPLE_INTERVAL)) {
     lastSample = now;
     sensors.requestTemperatures();
-    convStart  = millis();
+    convStart = millis();
     convPending = true;
   }
 
-  // 可选：从 LoRa 收到 STATUS 也上报
   if (LoRaSerial.available()) {
     String cmd = LoRaSerial.readStringUntil('\n');
     cmd.trim();
