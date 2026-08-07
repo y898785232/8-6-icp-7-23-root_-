@@ -1,6 +1,6 @@
 /*
- * ESP32-C3 温度传感器（适配 ICP 前端 door_ 协议）
- * 板子：ESP32-C3FH4
+ * ESP32-C3FH4 温度传感器 - door_ 协议
+ * 适配 ICP 前端 + Node 桥接
  */
 
 #include <WiFi.h>
@@ -12,12 +12,12 @@
 #include <HardwareSerial.h>
 #include <ArduinoJson.h>
 
-// ========== ESP32-C3 可用引脚 ==========
-#define ONE_WIRE_BUS  4     // DS18B20
-#define LORA_RX       6     // 接 LoRa TX
-#define LORA_TX       7     // 接 LoRa RX
+// ========== C3 引脚 ==========
+#define ONE_WIRE_BUS  4
+#define LORA_RX       6
+#define LORA_TX       7
 #define LORA_M0       5
-#define LORA_M1       10    // 不要用 8/9（启动脚）
+#define LORA_M1       10
 
 const char* mqtt_server = "b7fea2bf.ala.asia-southeast1.emqxsl.com";
 const uint16_t mqtt_port = 8883;
@@ -32,8 +32,8 @@ DallasTemperature sensors(&oneWire);
 
 String deviceId, topicCmd, topicStatus;
 
-const unsigned long SAMPLE_INTERVAL = 60000UL;
-unsigned long lastSample = 0, convStart = 0;
+const unsigned long SAMPLE_INTERVAL = 60000UL;  // 60秒
+unsigned long lastSample = 0, convStart = 0, lastWifiTry = 0;
 bool convPending = false;
 float latestTemp = 0.0;
 bool sensorOk = false;
@@ -113,16 +113,20 @@ void reconnectMQTT() {
   if (WiFi.status() != WL_CONNECTED) return;
 
   Serial.print("连接 MQTT...");
-  if (mqttClient.connect(deviceId.c_str(), mqtt_user, mqtt_pass)) {
+  String cid = deviceId + "_" + String((uint32_t)millis() % 10000);
+  if (mqttClient.connect(cid.c_str(), mqtt_user, mqtt_pass)) {
     Serial.println("成功");
     mqttClient.subscribe(topicCmd.c_str());
     publishStatus(true);
   } else {
-    Serial.printf("失败, rc=%d\n", mqttClient.state());
+    Serial.printf("失败, rc=%d wifi=%d\n", mqttClient.state(), WiFi.status());
   }
 }
 
 void setup() {
+  // 降频，减轻发热
+  setCpuFrequencyMhz(80);
+
   Serial.begin(115200);
   delay(2000);
   Serial.println();
@@ -142,19 +146,26 @@ void setup() {
   Serial.println("   STATUS: " + topicStatus);
 
   WiFiManager wifiManager;
-  // wifiManager.resetSettings();  // 重新配网时打开这行
+  // wifiManager.resetSettings();  // 重新配网时打开
   Serial.println("4: 进入 WiFi 配网...");
   if (!wifiManager.autoConnect("TEMP_SENSOR_ESP32")) {
     Serial.println("WiFi 失败，重启");
     delay(2000);
     ESP.restart();
   }
+
   Serial.println("5 OK: WiFi " + WiFi.localIP().toString());
 
+  // MQTT 稳定需要关睡眠；同时降发射功率减轻发热
+  WiFi.setSleep(false);
+  WiFi.setTxPower(WIFI_POWER_8_5dBm);  // 可选: WIFI_POWER_11dBm / WIFI_POWER_15dBm
+
   secureClient.setInsecure();
+  secureClient.setTimeout(20);
   mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setCallback(mqttCallback);
   mqttClient.setBufferSize(512);
+  mqttClient.setSocketTimeout(20);
   reconnectMQTT();
   Serial.println("6 OK: MQTT init");
 
@@ -169,16 +180,25 @@ void setup() {
 }
 
 void loop() {
-  if (WiFi.status() == WL_CONNECTED) {
-    if (!mqttClient.connected()) {
-      static unsigned long lastTry = 0;
-      if (millis() - lastTry > 5000) {
-        lastTry = millis();
-        reconnectMQTT();
-      }
-    } else {
-      mqttClient.loop();
+  // WiFi 掉线重连
+  if (WiFi.status() != WL_CONNECTED) {
+    if (millis() - lastWifiTry > 10000) {
+      lastWifiTry = millis();
+      Serial.println("WiFi 断开，重连...");
+      WiFi.reconnect();
     }
+    delay(50);
+    return;
+  }
+
+  if (!mqttClient.connected()) {
+    static unsigned long lastTry = 0;
+    if (millis() - lastTry > 5000) {
+      lastTry = millis();
+      reconnectMQTT();
+    }
+  } else {
+    mqttClient.loop();
   }
 
   unsigned long now = millis();
