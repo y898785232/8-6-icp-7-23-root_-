@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>环境温度监测</title>
+<script src="https://unpkg.com/mqtt@5.3.4/dist/mqtt.min.js"></script>
+<style>
+  :root { --bg:#0f1117; --card:#1c1f2e; --panel:#111318; --line:#2a2d3e; --text:#e5e7eb; --muted:#8b93a5; --brand:#38bdf8; --ok:#22c55e; --danger:#ef4444; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { min-height:100vh; display:flex; align-items:center; justify-content:center; padding:16px; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  .app { width:100%; max-width:440px; }
+  header { margin-bottom:24px; text-align:center; }
+  h1 { font-size:24px; }
+  .subtitle { margin-top:6px; color:var(--muted); font-size:13px; }
+  .card { padding:20px; border:1px solid var(--line); border-radius:20px; background:var(--card); }
+  .status-bar { display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; }
+  .status-item { display:flex; align-items:center; gap:7px; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); }
+  .dot.online { background:var(--ok); box-shadow:0 0 6px var(--ok); }
+  .dot.connecting { background:var(--brand); animation:pulse 1.5s infinite; }
+  @keyframes pulse { 50% { opacity:0.4; } }
+  .temperature { min-height:210px; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:28px 20px; border:1px solid var(--line); border-radius:16px; background:var(--panel); text-align:center; }
+  .temperature-value { color:var(--brand); font-size:72px; font-weight:750; letter-spacing:-4px; line-height:1; }
+  .temperature-value small { font-size:28px; }
+  .temperature-label { margin-top:16px; font-size:17px; font-weight:600; }
+  .device-line { margin-top:8px; color:var(--muted); font-size:12px; }
+  .notice { display:none; margin:12px 0; padding:12px; border-radius:10px; background:#3a1f22; color:#ff9a9a; font-size:14px; }
+  .notice.visible { display:block; }
+  .actions { display:flex; gap:10px; margin-top:16px; }
+  .btn { flex:1; padding:13px; border:1px solid var(--line); border-radius:12px; background:#1a1d2a; color:var(--text); font-weight:600; cursor:pointer; }
+  .btn-primary { background:#0e516b; border:1px solid #17627f; color:white; }
+</style>
+</head>
+<body>
+<main class="app">
+  <header>
+    <h1>环境温度监测</h1>
+    <p class="subtitle">DS18B20 + MQTT（door_ 协议）</p>
+  </header>
+
+  <section class="card">
+    <div class="status-bar">
+      <div class="status-item">
+        <span class="dot connecting" id="dot"></span>
+        <span id="connLabel">连接中…</span>
+      </div>
+      <button class="btn" style="font-size:12px;padding:6px 10px;" onclick="openSetup()">设备ID</button>
+    </div>
+
+    <div class="notice" id="notice"></div>
+
+    <div class="temperature">
+      <div class="temperature-value" id="tempValue">--<small>°C</small></div>
+      <div class="temperature-label" id="tempLabel">等待数据...</div>
+      <div class="device-line" id="deviceLine">未设置设备</div>
+    </div>
+
+    <div class="actions">
+      <button class="btn" onclick="requestStatus()">刷新读数</button>
+      <button class="btn btn-primary" onclick="openSetup()">更换设备</button>
+    </div>
+  </section>
+</main>
+
+<script>
+const BROKER = "wss://b7fea2bf.ala.asia-southeast1.emqxsl.com:8084/mqtt";
+const MQTT_USER = "eps8266nn";
+const MQTT_PASS = "yu155414";
+
+// 默认你的板子 ID，可改
+let deviceId = localStorage.getItem("door_device_id") || "door_76b144";
+let client = null;
+let statusTopic = "";
+let cmdTopic = "";
+
+function buildTopics() {
+  statusTopic = "door/" + deviceId + "/status";
+  cmdTopic = "door/" + deviceId + "/cmd";
+  document.getElementById("deviceLine").textContent = "设备: " + deviceId;
+}
+
+function init() {
+  if (!deviceId) openSetup();
+  else {
+    buildTopics();
+    connectMQTT();
+  }
+}
+
+function connectMQTT() {
+  if (client) {
+    try { client.end(true); } catch (e) {}
+    client = null;
+  }
+
+  document.getElementById("dot").className = "dot connecting";
+  document.getElementById("connLabel").textContent = "连接中…";
+
+  client = mqtt.connect(BROKER, {
+    username: MQTT_USER,
+    password: MQTT_PASS,
+    clientId: "web_temp_" + Math.random().toString(16).slice(2, 8),
+    reconnectPeriod: 3000
+  });
+
+  client.on("connect", () => {
+    document.getElementById("dot").className = "dot online";
+    document.getElementById("connLabel").textContent = "已连接";
+    if (statusTopic) {
+      client.subscribe(statusTopic, { qos: 1 });
+      setTimeout(requestStatus, 500);
+    }
+  });
+
+  client.on("message", (topic, payload) => {
+    if (topic !== statusTopic) return;
+    handleMessage(payload.toString());
+  });
+
+  client.on("close", () => {
+    document.getElementById("dot").className = "dot";
+    document.getElementById("connLabel").textContent = "已断开";
+  });
+
+  client.on("error", (err) => {
+    console.log("MQTT error", err);
+  });
+}
+
+function handleMessage(msg) {
+  let data;
+  try {
+    data = JSON.parse(msg);
+  } catch (e) {
+    return;
+  }
+
+  const tempEl = document.getElementById("tempValue");
+  const labelEl = document.getElementById("tempLabel");
+
+  // 兼容两套字段：
+  // 新固件: temperature / sensor_ok
+  // 旧格式: temp / ok
+  const sensorOk = (data.sensor_ok !== undefined) ? data.sensor_ok : data.ok;
+  let temp = data.temperature;
+  if (temp === undefined || temp === null) temp = data.temp;
+
+  if (sensorOk === false || temp === undefined || temp === null || typeof temp !== "number") {
+    tempEl.innerHTML = "--<small>°C</small>";
+    labelEl.textContent = "传感器异常";
+    showNotice("DS18B20 读取失败或无温度字段");
+    return;
+  }
+
+  hideNotice();
+  tempEl.innerHTML = temp.toFixed(1) + "<small>°C</small>";
+  labelEl.textContent = "更新于 " + new Date().toLocaleTimeString("zh-CN");
+}
+
+function requestStatus() {
+  if (client && client.connected && deviceId) {
+    client.publish(cmdTopic, "STATUS", { qos: 1 });
+  }
+}
+
+function showNotice(text) {
+  const n = document.getElementById("notice");
+  n.textContent = text;
+  n.classList.add("visible");
+}
+function hideNotice() {
+  document.getElementById("notice").classList.remove("visible");
+}
+
+function openSetup() {
+  const id = prompt("请输入设备 ID（格式：door_xxxxxxxx）", deviceId || "door_76b144");
+  if (id && id.trim().startsWith("door_")) {
+    deviceId = id.trim();
+    localStorage.setItem("door_device_id", deviceId);
+    buildTopics();
+    connectMQTT();
+  }
+}
+
+init();
+</script>
+</body>
+</html>
