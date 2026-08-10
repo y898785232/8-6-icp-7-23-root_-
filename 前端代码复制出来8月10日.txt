@@ -1,0 +1,1150 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>鏅鸿兘鎺у埗涓績</title>
+<script src="https://unpkg.com/mqtt@5.3.4/dist/mqtt.min.js"></script>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f4f6f9;margin:0;padding:15px;display:flex;flex-direction:column;align-items:center;box-sizing:border-box}
+.container{max-width:480px;width:100%;background:#fff;padding:20px;border-radius:20px;box-shadow:0 8px 24px rgba(0,0,0,.05);box-sizing:border-box}
+h2{text-align:center;color:#1a1a1a;margin:5px 0 20px;font-size:22px}
+.grid-status{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:20px}
+.status-item{background:#f8f9fa;border-radius:12px;padding:12px;display:flex;flex-direction:column;align-items:center;border:1px solid #edf0f2}
+.status-label{font-size:12px;color:#8e8e93;margin-bottom:6px}
+.badge{font-size:14px;font-weight:bold;padding:5px 12px;border-radius:20px;width:80%;text-align:center}
+.bg-online{background:#34c759;color:#fff}.bg-offline{background:#ff3b30;color:#fff}
+.bg-warning{background:#ffcc00;color:#1c1c1e}.bg-waiting{background:#8e8e93;color:#fff}
+.bg-dark{background:#5856d6;color:#fff}.bg-bright{background:#ff9500;color:#fff}
+.card{border:1px solid #edf0f2;border-radius:16px;padding:18px;margin-bottom:15px}
+.card-title{font-weight:600;font-size:15px;margin-bottom:14px}
+.btn{display:block;width:100%;padding:14px;font-size:16px;font-weight:600;border:none;border-radius:12px;cursor:pointer;text-align:center;box-sizing:border-box}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn-primary{background:#007aff;color:#fff}.btn-success{background:#34c759;color:#fff}
+.btn-danger{background:#ff3b30;color:#fff}.btn-gray{background:#8e8e93;color:#fff}
+.btn-row{display:flex;gap:10px}.btn-row .btn{flex:1}
+.timer-inputs{display:flex;gap:10px;width:100%;margin-bottom:14px}
+.time-box{flex:1;display:flex;flex-direction:column;gap:5px}.time-box span{font-size:12px;color:#8e8e93}
+input[type=time],input[type=text],input[type=email],input[type=password],input[type=number],textarea,select{
+width:100%;padding:10px;border:1px solid #d1d1d6;border-radius:8px;font-size:14px;background:#f8f9fa;box-sizing:border-box;margin-bottom:10px}
+textarea{min-height:70px;resize:vertical}
+input[type=checkbox]{width:18px;height:18px;margin-right:6px}
+#mqtt-banner{font-size:12px;text-align:center;padding:6px 0;margin-bottom:14px;color:#8e8e93}
+.auth-bar{display:flex;align-items:center;justify-content:space-between;background:#f6f0ff;border-radius:10px;padding:8px 12px;margin-bottom:14px;font-size:13px}
+.auth-bar button{font-size:12px;padding:4px 10px;border:1px solid #5856d6;border-radius:8px;background:#fff;color:#5856d6;cursor:pointer;margin-left:6px}
+.device-list-item{display:flex;align-items:center;background:#f8f9fa;border:1px solid #edf0f2;border-radius:14px;padding:14px;margin-bottom:10px;gap:10px}
+.device-list-item .device-icon{font-size:28px;flex-shrink:0}
+.device-list-item .device-info{flex:1;min-width:0}
+.device-list-item .device-name{font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.device-list-item .device-id{font-size:12px;color:#8e8e93;margin-top:2px;word-break:break-all}
+.device-list-item .device-actions{display:flex;gap:6px;flex-shrink:0}
+.device-list-item .btn-ctrl{font-size:13px;padding:7px 14px;background:#007aff;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:600}
+.device-list-item .btn-edit{font-size:13px;padding:7px 10px;background:#fff;color:#8e8e93;border:1px solid #d1d1d6;border-radius:8px;cursor:pointer}
+.add-device-btn{display:flex;align-items:center;justify-content:center;gap:8px;background:#f0f4ff;border:1.5px dashed #007aff;border-radius:14px;padding:14px;color:#007aff;font-size:15px;font-weight:600;cursor:pointer;margin-top:4px}
+.device-header{display:flex;align-items:center;background:#f0f4ff;border-radius:10px;padding:8px 12px;margin-bottom:10px;gap:8px}
+.device-header .back-btn{font-size:13px;padding:4px 10px;border:1px solid #007aff;border-radius:8px;background:#fff;color:#007aff;cursor:pointer}
+.type-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:14px}
+.type-btn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:12px 8px;border:2px solid #edf0f2;border-radius:12px;background:#f8f9fa;cursor:pointer}
+.type-btn.selected{border-color:#007aff;background:#e8f2ff}
+.type-btn .type-icon{font-size:24px}.type-btn .type-label{font-size:12px;font-weight:600}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:999}
+.modal-box{background:#fff;border-radius:20px;padding:28px 24px;width:320px;box-shadow:0 12px 40px rgba(0,0,0,.2);max-height:90vh;overflow-y:auto}
+.modal-box h3{margin:0 0 8px;font-size:18px}.modal-box p{margin:0 0 12px;font-size:13px;color:#8e8e93}
+.modal-btn-row{display:flex;gap:10px}.modal-btn-row .btn{flex:1;padding:12px;font-size:15px}
+.section-label{font-size:12px;color:#8e8e93;margin-bottom:8px;font-weight:500}
+.tabs{display:flex;margin-bottom:16px;border-radius:12px;overflow:hidden;border:1px solid #edf0f2}
+.tab{flex:1;text-align:center;padding:12px;background:#f8f9fa;cursor:pointer;font-weight:600;font-size:14px}
+.tab.active{background:#007aff;color:#fff}
+.hidden{display:none!important}
+.nav{display:flex;gap:8px;margin-bottom:14px}
+.nav button{flex:1;padding:10px;font-size:13px;border-radius:10px;border:1px solid #edf0f2;background:#f8f9fa;cursor:pointer;font-weight:600}
+.nav button.active{background:#007aff;color:#fff;border-color:#007aff}
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);background:#1c1c1e;color:#fff;padding:10px 20px;border-radius:20px;font-size:14px;transition:transform .3s;z-index:9999}
+.toast.show{transform:translateX(-50%) translateY(0)}
+.temp-big{font-size:42px;font-weight:700;color:#007aff;text-align:center;padding:20px 0}
+</style>
+</head>
+<body>
+
+<div class="modal-overlay" id="modal-overlay" style="display:none">
+  <div class="modal-box">
+    <div id="modal-bind-section" style="display:none">
+      <h3>缁戝畾鏂拌澶?/h3>
+      <p>鏀寔 <strong>ESP_XXXXXX</strong> 鎴?<strong>door_xxxxxx</strong></p>
+      <input type="text" id="modal-device-id" placeholder="渚嬪锛欵SP_1A2B3C 鎴?door_772ef9" maxlength="32">
+      <input type="text" id="modal-device-name" placeholder="璁惧鍚嶇О锛堝锛氶浮鑸嶄富妫氾級" maxlength="20">
+      <div class="section-label">閫夋嫨璁惧绫诲瀷</div>
+      <div class="type-grid" id="type-grid">
+        <div class="type-btn selected" data-type="jishe" onclick="selectType('jishe')"><span class="type-icon">馃悢</span><span class="type-label">楦¤垗</span></div>
+        <div class="type-btn" data-type="shuibeng" onclick="selectType('shuibeng')"><span class="type-icon">馃挧</span><span class="type-label">姘存车</span></div>
+        <div class="type-btn" data-type="juanlianmen" onclick="selectType('juanlianmen')"><span class="type-icon">馃毆</span><span class="type-label">鍗峰笜闂?/span></div>
+        <div class="type-btn" data-type="shuangdeng" onclick="selectType('shuangdeng')"><span class="type-icon">馃挕</span><span class="type-label">鍙岀伅+姘存车</span></div>
+        <div class="type-btn" data-type="tempsensor" onclick="selectType('tempsensor')"><span class="type-icon">馃尅锔?/span><span class="type-label">娓╁害浼犳劅鍣?/span></div>
+        <div class="type-btn" data-type="other" onclick="selectType('other')"><span class="type-icon">馃摗</span><span class="type-label">鍏朵粬</span></div>
+      </div>
+      <div class="modal-btn-row">
+        <button class="btn btn-gray" id="modal-cancel-btn" onclick="cancelBind()" style="display:none">鍙栨秷</button>
+        <button class="btn btn-primary" onclick="bindDevice()">纭缁戝畾</button>
+      </div>
+    </div>
+    <div id="modal-rename-section" style="display:none">
+      <h3>缂栬緫璁惧</h3>
+      <input type="text" id="modal-rename-input" placeholder="璁惧鍚嶇О" maxlength="20">
+      <div class="section-label">璁惧绫诲瀷</div>
+      <div class="type-grid" id="type-grid-rename">
+        <div class="type-btn" data-type="jishe" onclick="selectTypeRename('jishe')"><span class="type-icon">馃悢</span><span class="type-label">楦¤垗</span></div>
+        <div class="type-btn" data-type="shuibeng" onclick="selectTypeRename('shuibeng')"><span class="type-icon">馃挧</span><span class="type-label">姘存车</span></div>
+        <div class="type-btn" data-type="juanlianmen" onclick="selectTypeRename('juanlianmen')"><span class="type-icon">馃毆</span><span class="type-label">鍗峰笜闂?/span></div>
+        <div class="type-btn" data-type="shuangdeng" onclick="selectTypeRename('shuangdeng')"><span class="type-icon">馃挕</span><span class="type-label">鍙岀伅+姘存车</span></div>
+        <div class="type-btn" data-type="tempsensor" onclick="selectTypeRename('tempsensor')"><span class="type-icon">馃尅锔?/span><span class="type-label">娓╁害浼犳劅鍣?/span></div>
+        <div class="type-btn" data-type="other" onclick="selectTypeRename('other')"><span class="type-icon">馃摗</span><span class="type-label">鍏朵粬</span></div>
+      </div>
+      <div class="modal-btn-row" style="margin-top:14px">
+        <button class="btn btn-gray" onclick="cancelRename()">鍙栨秷</button>
+        <button class="btn btn-primary" onclick="confirmRename()">纭</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="container">
+  <h2>馃彔 鏅鸿兘鎺у埗涓績</h2>
+
+  <div id="view-auth">
+    <div class="tabs">
+      <div class="tab active" id="tab-login" onclick="switchAuthTab('login')">鐧诲綍</div>
+      <div class="tab" id="tab-register" onclick="switchAuthTab('register')">娉ㄥ唽</div>
+    </div>
+    <div id="panel-login">
+      <input type="email" id="login-email" placeholder="閭">
+      <input type="password" id="login-password" placeholder="瀵嗙爜">
+      <button class="btn btn-primary" onclick="emailLogin()">閭鐧诲綍</button>
+      <div style="text-align:center;margin:16px 0;color:#8e8e93;font-size:13px">鎴?/div>
+      <button class="btn btn-success" onclick="iiLogin()">馃枑锔?Internet Identity 鐧诲綍</button>
+    </div>
+    <div id="panel-register" class="hidden">
+      <input type="email" id="reg-email" placeholder="閭">
+      <input type="password" id="reg-password" placeholder="瀵嗙爜锛堣嚦灏?浣嶏級">
+      <input type="password" id="reg-password2" placeholder="纭瀵嗙爜">
+      <button class="btn btn-primary" onclick="emailRegister()">娉ㄥ唽璐﹀彿</button>
+      <div style="text-align:center;margin:16px 0;color:#8e8e93;font-size:13px">鎴?/div>
+      <button class="btn btn-success" onclick="iiLogin()">馃枑锔?浣跨敤 Internet Identity 娉ㄥ唽/鐧诲綍</button>
+    </div>
+  </div>
+
+  <div id="view-main" class="hidden">
+    <div class="auth-bar">
+      <span id="auth-status">宸茬櫥褰?/span>
+      <div>
+        <button onclick="showAccountSecurity()">璐﹀彿瀹夊叏</button>
+        <button onclick="logout()">閫€鍑?/button>
+      </div>
+    </div>
+
+    <div class="nav" id="main-nav">
+      <button class="active" onclick="switchMainTab('devices')">璁惧</button>
+      <button onclick="switchMainTab('pages')">椤甸潰</button>
+      <button onclick="switchMainTab('rules')">瑙勫垯</button>
+    </div>
+
+    <div id="view-list">
+      <div style="font-size:13px;color:#8e8e93;margin-bottom:10px">閫夋嫨瑕佹帶鍒剁殑璁惧</div>
+      <div id="device-list-container"></div>
+      <div class="add-device-btn" onclick="showBindForm()"><span>锛?/span><span>缁戝畾鏂拌澶?/span></div>
+    </div>
+
+    <div id="view-control" class="hidden">
+      <div class="device-header">
+        <button class="back-btn" onclick="backToList()">鈫?杩斿洖</button>
+        <span class="cur-device-name" id="cur-device-name">--</span>
+        <span class="cur-device-id" id="cur-device-id">--</span>
+      </div>
+      <div id="mqtt-banner">姝ｅ湪杩炴帴浜戠鏈嶅姟鍣?..</div>
+      <div id="status-grid" class="grid-status"></div>
+      <div id="device-panels"></div>
+    </div>
+
+    <div id="view-pages" class="hidden">
+      <div id="page-list-container"></div>
+      <div class="card" id="page-create-card">
+        <div class="card-title">鍒涘缓椤甸潰</div>
+        <input type="text" id="new-page-device" placeholder="鍏宠仈璁惧ID锛屽 ESP_1A2B3C 鎴?door_772ef9">
+        <input type="text" id="new-page-title" placeholder="椤甸潰鏍囬锛屽锛氶浮鑸?>
+        <button class="btn btn-primary" onclick="createPage()">鍒涘缓椤甸潰</button>
+      </div>
+      <div id="page-detail" class="hidden">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+          <button class="btn btn-gray" style="width:auto;padding:8px 12px;font-size:13px" onclick="backPageList()">鈫?杩斿洖</button>
+          <span id="cur-page-title" style="font-weight:600"></span>
+        </div>
+        <div id="component-list-container"></div>
+        <div class="card">
+          <div class="card-title">娣诲姞鎺т欢</div>
+          <select id="new-comp-type">
+            <option value="switch">寮€鍏?switch</option>
+            <option value="button">鎸夐挳 button</option>
+            <option value="slider">婊戝潡 slider</option>
+            <option value="number">鏁板€?number</option>
+            <option value="text">鏂囨湰 text</option>
+            <option value="gauge">浠〃 gauge</option>
+            <option value="chart">鍥捐〃 chart</option>
+            <option value="camera">鎽勫儚澶?camera</option>
+          </select>
+          <input type="text" id="new-comp-title" placeholder="鎺т欢鍚嶇О锛屽锛氱収鏄庣伅">
+          <textarea id="new-comp-config" placeholder='閰嶇疆JSON锛屽 {"topic":"door/door_xxx/status"}'></textarea>
+          <input type="number" id="new-comp-sort" value="1" placeholder="鎺掑簭鍙?>
+          <button class="btn btn-primary" onclick="createComponent()">娣诲姞鎺т欢</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="view-rules" class="hidden">
+      <div id="rule-list-container"></div>
+      <div class="card">
+        <div class="card-title">鍒涘缓鑷姩鍖栬鍒?/div>
+        <input type="text" id="new-rule-device" placeholder="璁惧ID锛屽 door_772ef9">
+        <input type="text" id="new-rule-trigger" placeholder="瑙﹀彂婧愶紝濡?temperature">
+        <input type="text" id="new-rule-condition" placeholder='鏉′欢JSON锛屽 {"op":">","value":30}'>
+        <input type="text" id="new-rule-action" placeholder='鍔ㄤ綔JSON锛屽 {"cmd":"PUMP_ON"}'>
+        <input type="number" id="new-rule-priority" value="10" placeholder="浼樺厛绾?>
+        <label style="display:flex;align-items:center;font-size:14px;margin-bottom:10px">
+          <input type="checkbox" id="new-rule-enable" checked> 鍚敤瑙勫垯
+        </label>
+        <button class="btn btn-primary" onclick="createRule()">鍒涘缓瑙勫垯</button>
+      </div>
+    </div>
+
+    <div id="view-account" class="hidden">
+      <div class="card"><div class="card-title">璐﹀彿淇℃伅</div><div id="account-info" style="font-size:14px;line-height:1.8"></div></div>
+      <div class="card"><div class="card-title">缁戝畾 Internet Identity</div>
+        <p style="font-size:13px;color:#8e8e93;margin-bottom:12px">缁戝畾鍚庡彲浣跨敤鎸囩汗/闈㈠蹇€熺櫥褰?/p>
+        <button class="btn btn-primary" onclick="bindII()">缁戝畾 Internet Identity</button>
+      </div>
+      <div class="card"><div class="card-title">璁剧疆/淇敼瀵嗙爜</div>
+        <input type="password" id="new-password" placeholder="鏂板瘑鐮?>
+        <input type="password" id="new-password2" placeholder="纭鏂板瘑鐮?>
+        <button class="btn btn-primary" onclick="setNewPassword()">淇濆瓨瀵嗙爜</button>
+      </div>
+      <div class="card"><div class="card-title">缁戝畾閭锛圛I鐢ㄦ埛琛ュ厖锛?/div>
+        <input type="email" id="bind-email" placeholder="閭">
+        <input type="password" id="bind-email-pwd" placeholder="璁剧疆瀵嗙爜">
+        <button class="btn btn-primary" onclick="doBindEmail()">缁戝畾閭</button>
+      </div>
+      <button class="btn btn-gray" onclick="backFromAccount()">杩斿洖</button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script type="module">
+import { AuthClient } from "https://esm.sh/@dfinity/auth-client@3";
+import { HttpAgent, Actor } from "https://esm.sh/@dfinity/agent@3";
+
+const BACKEND_CANISTER_ID = "qitoc-aiaaa-aaaao-bbcvq-cai";
+const II_URL = "https://identity.ic0.app";
+const MQTT_HOST = "wss://b7fea2bf.ala.asia-southeast1.emqxsl.com:8084/mqtt";
+const OFFLINE_MS = 360000;
+
+const idlFactory = ({ IDL }) => {
+  const User = IDL.Record({
+    id: IDL.Nat, username: IDL.Opt(IDL.Text), email: IDL.Opt(IDL.Text), phone: IDL.Opt(IDL.Text),
+    passwordHash: IDL.Opt(IDL.Text),
+    methods: IDL.Vec(IDL.Variant({ InternetIdentity: IDL.Principal, Email: IDL.Text, Phone: IDL.Text, WeChat: IDL.Text })),
+    createdAt: IDL.Int, updatedAt: IDL.Int
+  });
+  const AuthResult = IDL.Variant({ ok: IDL.Record({ user: User, sessionId: IDL.Opt(IDL.Text) }), err: IDL.Text });
+  const OpResult = IDL.Variant({ ok: IDL.Text, err: IDL.Text });
+  const Page = IDL.Record({ id: IDL.Nat, userId: IDL.Nat, deviceId: IDL.Text, title: IDL.Text, createdAt: IDL.Int });
+  const Component = IDL.Record({ id: IDL.Nat, pageId: IDL.Nat, componentType: IDL.Text, title: IDL.Text, config: IDL.Text, sort: IDL.Nat, createdAt: IDL.Int });
+  const Rule = IDL.Record({ id: IDL.Nat, deviceId: IDL.Text, enable: IDL.Bool, trigger: IDL.Text, condition: IDL.Text, action: IDL.Text, priority: IDL.Nat, createdAt: IDL.Int });
+  return IDL.Service({
+    registerWithEmail: IDL.Func([IDL.Text, IDL.Text], [AuthResult], []),
+    loginWithEmail: IDL.Func([IDL.Text, IDL.Text], [AuthResult], []),
+    getOrCreateUserByII: IDL.Func([], [AuthResult], []),
+    bindInternetIdentity: IDL.Func([IDL.Opt(IDL.Text)], [OpResult], []),
+    bindEmail: IDL.Func([IDL.Text, IDL.Text, IDL.Opt(IDL.Text)], [OpResult], []),
+    setPassword: IDL.Func([IDL.Text, IDL.Opt(IDL.Text)], [OpResult], []),
+    updateProfile: IDL.Func([IDL.Opt(IDL.Text), IDL.Opt(IDL.Text), IDL.Opt(IDL.Text)], [OpResult], []),
+    getMyProfile: IDL.Func([IDL.Opt(IDL.Text)], [IDL.Variant({ ok: User, err: IDL.Text })], ["query"]),
+    bindDevice: IDL.Func([IDL.Text, IDL.Opt(IDL.Text)], [OpResult], []),
+    unbindDevice: IDL.Func([IDL.Text, IDL.Opt(IDL.Text)], [OpResult], []),
+    myDevices: IDL.Func([IDL.Opt(IDL.Text)], [IDL.Vec(IDL.Text)], ["query"]),
+    isDeviceBound: IDL.Func([IDL.Text], [IDL.Bool], ["query"]),
+    createPage: IDL.Func([IDL.Text, IDL.Text, IDL.Opt(IDL.Text)], [IDL.Variant({ ok: Page, err: IDL.Text })], []),
+    updatePage: IDL.Func([IDL.Nat, IDL.Text, IDL.Opt(IDL.Text)], [OpResult], []),
+    deletePage: IDL.Func([IDL.Nat, IDL.Opt(IDL.Text)], [OpResult], []),
+    getPages: IDL.Func([IDL.Opt(IDL.Text)], [IDL.Vec(Page)], ["query"]),
+    createComponent: IDL.Func([IDL.Nat, IDL.Text, IDL.Text, IDL.Text, IDL.Nat, IDL.Opt(IDL.Text)], [IDL.Variant({ ok: Component, err: IDL.Text })], []),
+    updateComponent: IDL.Func([IDL.Nat, IDL.Text, IDL.Text, IDL.Nat, IDL.Opt(IDL.Text)], [OpResult], []),
+    deleteComponent: IDL.Func([IDL.Nat, IDL.Opt(IDL.Text)], [OpResult], []),
+    getComponents: IDL.Func([IDL.Nat, IDL.Opt(IDL.Text)], [IDL.Vec(Component)], ["query"]),
+    createRule: IDL.Func([IDL.Text, IDL.Bool, IDL.Text, IDL.Text, IDL.Text, IDL.Nat, IDL.Opt(IDL.Text)], [IDL.Variant({ ok: Rule, err: IDL.Text })], []),
+    updateRule: IDL.Func([IDL.Nat, IDL.Bool, IDL.Text, IDL.Text, IDL.Text, IDL.Nat, IDL.Opt(IDL.Text)], [OpResult], []),
+    deleteRule: IDL.Func([IDL.Nat, IDL.Opt(IDL.Text)], [OpResult], []),
+    getRules: IDL.Func([IDL.Opt(IDL.Text)], [IDL.Vec(Rule)], ["query"]),
+    getEnabledRules: IDL.Func([], [IDL.Vec(Rule)], ["query"]),
+  });
+};
+
+const DEVICE_TYPES = {
+  jishe: { icon: '馃悢', label: '楦¤垗' },
+  shuibeng: { icon: '馃挧', label: '姘存车' },
+  juanlianmen: { icon: '馃毆', label: '鍗峰笜闂? },
+  shuangdeng: { icon: '馃挕', label: '鍙岀伅+姘存车' },
+  tempsensor: { icon: '馃尅锔?, label: '娓╁害浼犳劅鍣? },
+  other: { icon: '馃摗', label: '鍏朵粬' }
+};
+
+let authClient = null, backendActor = null, currentUser = null;
+let sessionId = localStorage.getItem('sessionId') || null;
+let allDevices = [], deviceId = '', cmdTopic = '', statusTopic = '';
+let lampState = false, lamp2State = false, pumpState = false;
+let lastHeartbeat = 0, mqttConnected = false, client = null, offlineCheckTimer = null, toastTimer = null;
+let renamingDeviceId = null, selectedBindType = 'jishe', selectedRenameType = 'jishe', currentPageId = null;
+let latestTemp = null;
+
+const getDeviceName = id => localStorage.getItem('dn_' + id) || id;
+const setDeviceName = (id, v) => v && v.trim() && localStorage.setItem('dn_' + id, v.trim());
+const getDeviceType = id => localStorage.getItem('dt_' + id) || (id.startsWith('door_') ? 'tempsensor' : 'jishe');
+const setDeviceType = (id, v) => localStorage.setItem('dt_' + id, v);
+const getDeviceIcon = id => DEVICE_TYPES[getDeviceType(id)]?.icon || '馃摗';
+function isDoorDevice(id) { return id && id.startsWith('door_'); }
+function optSession() { return sessionId ? [sessionId] : []; }
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.classList.add('show');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+}
+async function hashPassword(password, email) {
+  const data = new TextEncoder().encode(password + email.toLowerCase());
+  const hash = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function switchAuthTab(tab) {
+  document.getElementById('tab-login').classList.toggle('active', tab === 'login');
+  document.getElementById('tab-register').classList.toggle('active', tab === 'register');
+  document.getElementById('panel-login').classList.toggle('hidden', tab !== 'login');
+  document.getElementById('panel-register').classList.toggle('hidden', tab !== 'register');
+}
+
+function switchMainTab(tab) {
+  ['view-list', 'view-control', 'view-pages', 'view-rules', 'view-account'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.classList.add('hidden');
+  });
+  document.querySelectorAll('#main-nav button').forEach(b => b.classList.remove('active'));
+  if (tab === 'devices') {
+    document.getElementById('view-list').classList.remove('hidden');
+    document.getElementById('view-list').style.display = 'block';
+    document.querySelectorAll('#main-nav button')[0].classList.add('active');
+    loadDevices();
+  }
+  if (tab === 'pages') {
+    document.getElementById('view-pages').classList.remove('hidden');
+    document.querySelectorAll('#main-nav button')[1].classList.add('active');
+    loadPages();
+  }
+  if (tab === 'rules') {
+    document.getElementById('view-rules').classList.remove('hidden');
+    document.querySelectorAll('#main-nav button')[2].classList.add('active');
+    loadRules();
+  }
+}
+
+function showMain() {
+  document.getElementById('view-auth').classList.add('hidden');
+  document.getElementById('view-main').classList.remove('hidden');
+  const name = (currentUser.username && currentUser.username[0]) || (currentUser.email && currentUser.email[0]) || ('鐢ㄦ埛#' + currentUser.id);
+  document.getElementById('auth-status').textContent = '鉁?' + name;
+  switchMainTab('devices');
+}
+
+async function init() {
+  authClient = await AuthClient.create({ idleOptions: { disableIdle: true } });
+  const identity = authClient.getIdentity();
+  const agent = new HttpAgent({ identity, host: 'https://icp0.io' });
+  backendActor = Actor.createActor(idlFactory, { agent, canisterId: BACKEND_CANISTER_ID });
+  if (await authClient.isAuthenticated()) { await handleIILogin(true); }
+  else if (sessionId) {
+    try {
+      const res = await backendActor.getMyProfile(optSession());
+      if (res.ok) { currentUser = res.ok; showMain(); }
+      else { localStorage.removeItem('sessionId'); sessionId = null; }
+    } catch (e) { localStorage.removeItem('sessionId'); sessionId = null; }
+  }
+}
+
+async function emailRegister() {
+  const email = document.getElementById('reg-email').value.trim();
+  const pwd = document.getElementById('reg-password').value;
+  const pwd2 = document.getElementById('reg-password2').value;
+  if (!email || !pwd) return showToast('璇峰～鍐欓偖绠卞拰瀵嗙爜');
+  if (pwd.length < 6) return showToast('瀵嗙爜鑷冲皯6浣?);
+  if (pwd !== pwd2) return showToast('涓ゆ瀵嗙爜涓嶄竴鑷?);
+  try {
+    const hash = await hashPassword(pwd, email);
+    const res = await backendActor.registerWithEmail(email, hash);
+    if (res.err) return showToast('鉂?' + res.err);
+    currentUser = res.ok.user;
+    sessionId = (res.ok.sessionId && res.ok.sessionId[0]) || null;
+    if (sessionId) localStorage.setItem('sessionId', sessionId);
+    showToast('鉁?娉ㄥ唽鎴愬姛'); showMain();
+  } catch (e) { showToast('鉂?' + e.message); }
+}
+
+async function emailLogin() {
+  const email = document.getElementById('login-email').value.trim();
+  const pwd = document.getElementById('login-password').value;
+  if (!email || !pwd) return showToast('璇峰～鍐欓偖绠卞拰瀵嗙爜');
+  try {
+    const hash = await hashPassword(pwd, email);
+    const res = await backendActor.loginWithEmail(email, hash);
+    if (res.err) return showToast('鉂?' + res.err);
+    currentUser = res.ok.user;
+    sessionId = (res.ok.sessionId && res.ok.sessionId[0]) || null;
+    if (sessionId) localStorage.setItem('sessionId', sessionId);
+    showToast('鉁?鐧诲綍鎴愬姛'); showMain();
+  } catch (e) { showToast('鉂?' + e.message); }
+}
+
+async function iiLogin() {
+  try {
+    await authClient.login({
+      identityProvider: II_URL,
+      maxTimeToLive: BigInt(30 * 24 * 60 * 60) * BigInt(1e9),
+      onSuccess: async () => await handleIILogin(false),
+      onError: err => showToast('鉂?II鐧诲綍澶辫触: ' + (err || '鏈煡閿欒'))
+    });
+  } catch (e) { showToast('鉂?' + e.message); }
+}
+
+async function handleIILogin(silent) {
+  try {
+    const identity = authClient.getIdentity();
+    const agent = new HttpAgent({ identity, host: 'https://icp0.io' });
+    backendActor = Actor.createActor(idlFactory, { agent, canisterId: BACKEND_CANISTER_ID });
+    const res = await backendActor.getOrCreateUserByII();
+    if (res.err) { if (!silent) showToast('鉂?' + res.err); return; }
+    currentUser = res.ok.user; sessionId = null; localStorage.removeItem('sessionId');
+    if (!silent) showToast('鉁?II鐧诲綍鎴愬姛');
+    showMain();
+  } catch (e) { if (!silent) showToast('鉂?' + e.message); }
+}
+
+async function logout() {
+  if (await authClient.isAuthenticated()) await authClient.logout();
+  currentUser = null; sessionId = null; localStorage.removeItem('sessionId'); location.reload();
+}
+
+function showAccountSecurity() {
+  ['view-list', 'view-control', 'view-pages', 'view-rules'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.classList.add('hidden');
+  });
+  document.getElementById('view-account').classList.remove('hidden');
+  const u = currentUser;
+  let html = '鐢ㄦ埛ID: ' + u.id + '<br>';
+  if (u.username && u.username[0]) html += '鐢ㄦ埛鍚? ' + u.username[0] + '<br>';
+  if (u.email && u.email[0]) html += '閭: ' + u.email[0] + '<br>';
+  html += '鐧诲綍鏂瑰紡: ';
+  (u.methods || []).forEach(m => {
+    if (m.InternetIdentity !== undefined) html += 'II ';
+    if (m.Email !== undefined) html += '閭 ';
+  });
+  document.getElementById('account-info').innerHTML = html;
+}
+function backFromAccount() {
+  document.getElementById('view-account').classList.add('hidden');
+  switchMainTab('devices');
+}
+
+async function bindII() {
+  try {
+    await authClient.login({
+      identityProvider: II_URL,
+      onSuccess: async () => {
+        const identity = authClient.getIdentity();
+        const agent = new HttpAgent({ identity, host: 'https://icp0.io' });
+        backendActor = Actor.createActor(idlFactory, { agent, canisterId: BACKEND_CANISTER_ID });
+        const res = await backendActor.bindInternetIdentity(optSession());
+        if (res.err) showToast('鉂?' + res.err);
+        else {
+          showToast('鉁?' + res.ok);
+          const p = await backendActor.getMyProfile(optSession());
+          if (p.ok) currentUser = p.ok;
+          showAccountSecurity();
+        }
+      }
+    });
+  } catch (e) { showToast('鉂?' + e.message); }
+}
+
+async function setNewPassword() {
+  const p1 = document.getElementById('new-password').value;
+  const p2 = document.getElementById('new-password2').value;
+  if (!p1 || p1.length < 6) return showToast('瀵嗙爜鑷冲皯6浣?);
+  if (p1 !== p2) return showToast('涓ゆ瀵嗙爜涓嶄竴鑷?);
+  try {
+    const email = (currentUser.email && currentUser.email[0]) || 'default';
+    const hash = await hashPassword(p1, email);
+    const res = await backendActor.setPassword(hash, optSession());
+    showToast(res.err ? '鉂?' + res.err : '鉁?' + res.ok);
+  } catch (e) { showToast('鉂?' + e.message); }
+}
+
+async function doBindEmail() {
+  const email = document.getElementById('bind-email').value.trim();
+  const pwd = document.getElementById('bind-email-pwd').value;
+  if (!email || !pwd) return showToast('璇峰～鍐欓偖绠卞拰瀵嗙爜');
+  try {
+    const hash = await hashPassword(pwd, email);
+    const res = await backendActor.bindEmail(email, hash, optSession());
+    if (res.err) showToast('鉂?' + res.err);
+    else {
+      showToast('鉁?' + res.ok);
+      const p = await backendActor.getMyProfile(optSession());
+      if (p.ok) currentUser = p.ok;
+      showAccountSecurity();
+    }
+  } catch (e) { showToast('鉂?' + e.message); }
+}
+
+// ===== 璁惧 =====
+async function loadDevices() {
+  try {
+    allDevices = await backendActor.myDevices(optSession());
+    const c = document.getElementById('device-list-container');
+    c.innerHTML = '';
+    allDevices.forEach(id => {
+      const item = document.createElement('div');
+      item.className = 'device-list-item';
+      item.innerHTML =
+        '<div class="device-icon">' + getDeviceIcon(id) + '</div>' +
+        '<div class="device-info"><div class="device-name">' + getDeviceName(id) + '</div>' +
+        '<div class="device-id">' + id + ' 路 ' + (DEVICE_TYPES[getDeviceType(id)]?.label || '') + '</div></div>' +
+        '<div class="device-actions">' +
+        '<button class="btn-edit" onclick="showRename(\'' + id + '\')">鉁忥笍</button>' +
+        '<button class="btn-ctrl" onclick="selectDevice(\'' + id + '\')">鎺у埗</button></div>';
+      c.appendChild(item);
+    });
+  } catch (e) { showToast('鑾峰彇璁惧澶辫触: ' + e.message); }
+}
+
+function showBindForm(showCancel) {
+  if (showCancel === undefined) showCancel = true;
+  document.getElementById('modal-device-id').value = '';
+  document.getElementById('modal-device-name').value = '';
+  selectedBindType = 'jishe';
+  document.querySelectorAll('#type-grid .type-btn').forEach(b => b.classList.toggle('selected', b.dataset.type === 'jishe'));
+  document.getElementById('modal-cancel-btn').style.display = showCancel ? 'block' : 'none';
+  document.getElementById('modal-overlay').style.display = 'flex';
+  document.getElementById('modal-bind-section').style.display = 'block';
+  document.getElementById('modal-rename-section').style.display = 'none';
+}
+function cancelBind() { document.getElementById('modal-overlay').style.display = 'none'; }
+function selectType(type) {
+  selectedBindType = type;
+  document.querySelectorAll('#type-grid .type-btn').forEach(b => b.classList.toggle('selected', b.dataset.type === type));
+}
+function selectTypeRename(type) {
+  selectedRenameType = type;
+  document.querySelectorAll('#type-grid-rename .type-btn').forEach(b => b.classList.toggle('selected', b.dataset.type === type));
+}
+
+async function bindDevice() {
+  let id = document.getElementById('modal-device-id').value.trim();
+  const name = document.getElementById('modal-device-name').value.trim();
+  if (!id) return showToast('璇疯緭鍏ヨ澶嘔D');
+  // door_ 淇濇寔灏忓啓椋庢牸锛孍SP_ 杞ぇ鍐?  if (id.toLowerCase().startsWith('door_')) {
+    id = 'door_' + id.substring(5);
+  } else {
+    id = id.toUpperCase();
+  }
+  if (!id.startsWith('ESP_') && !id.startsWith('door_')) {
+    return showToast('璁惧ID搴斾互 ESP_ 鎴?door_ 寮€澶?);
+  }
+  try {
+    const res = await backendActor.bindDevice(id, optSession());
+    if (res.err) return showToast('鉂?' + res.err);
+    setDeviceName(id, name || id);
+    // door_ 榛樿娓╁害浼犳劅鍣ㄧ被鍨?    const type = selectedBindType === 'jishe' && id.startsWith('door_') ? 'tempsensor' : selectedBindType;
+    setDeviceType(id, type);
+    document.getElementById('modal-overlay').style.display = 'none';
+    showToast('鉁?缁戝畾鎴愬姛');
+    loadDevices();
+  } catch (e) { showToast('鉂?' + e.message); }
+}
+
+function showRename(id) {
+  renamingDeviceId = id;
+  document.getElementById('modal-rename-input').value = getDeviceName(id);
+  selectedRenameType = getDeviceType(id);
+  document.querySelectorAll('#type-grid-rename .type-btn').forEach(b => b.classList.toggle('selected', b.dataset.type === selectedRenameType));
+  document.getElementById('modal-overlay').style.display = 'flex';
+  document.getElementById('modal-bind-section').style.display = 'none';
+  document.getElementById('modal-rename-section').style.display = 'block';
+}
+function cancelRename() { document.getElementById('modal-overlay').style.display = 'none'; renamingDeviceId = null; }
+function confirmRename() {
+  const name = document.getElementById('modal-rename-input').value.trim();
+  if (renamingDeviceId) {
+    setDeviceName(renamingDeviceId, name);
+    setDeviceType(renamingDeviceId, selectedRenameType);
+    showToast('鉁?宸叉洿鏂?);
+    loadDevices();
+  }
+  document.getElementById('modal-overlay').style.display = 'none';
+  renamingDeviceId = null;
+}
+
+async function unbindCurrentDevice() {
+  if (!confirm('纭畾瑙ｇ粦姝よ澶囧悧锛?)) return;
+  try {
+    const res = await backendActor.unbindDevice(deviceId, optSession());
+    if (res.err) return showToast('鉂?' + res.err);
+    localStorage.removeItem('dn_' + deviceId);
+    localStorage.removeItem('dt_' + deviceId);
+    showToast('鉁?宸茶В缁?);
+    backToList();
+    loadDevices();
+  } catch (e) { showToast('鉂?' + e.message); }
+}
+
+function selectDevice(id) {
+  deviceId = id;
+  document.getElementById('view-list').classList.add('hidden');
+  document.getElementById('view-control').classList.remove('hidden');
+  document.getElementById('cur-device-name').textContent = getDeviceName(id);
+  document.getElementById('cur-device-id').textContent = id;
+  renderControlPanel(getDeviceType(id));
+  initMQTT();
+}
+function backToList() {
+  disconnectMQTT();
+  document.getElementById('view-control').classList.add('hidden');
+  document.getElementById('view-list').classList.remove('hidden');
+  document.getElementById('view-list').style.display = 'block';
+}
+
+function renderControlPanel(type) {
+  const statusGrid = document.getElementById('status-grid');
+  const panels = document.getElementById('device-panels');
+  const unbind = '<div class="card" style="background:#fff5f5;border-color:#ffdee0"><div class="card-title" style="color:#ff3b30">鈿狅笍 瑙ｇ粦姝よ澶?/div><button class="btn btn-danger" onclick="unbindCurrentDevice()">瑙ｇ粦褰撳墠璁惧</button></div>';
+
+  if (type === 'tempsensor') {
+    statusGrid.innerHTML =
+      '<div class="status-item"><span class="status-label">璁惧</span><span id="dev-status" class="badge bg-waiting">绛夊緟杩炴帴</span></div>' +
+      '<div class="status-item"><span class="status-label">浼犳劅鍣?/span><span id="sensor-status" class="badge bg-waiting">鏈煡</span></div>';
+    panels.innerHTML =
+      '<div class="card"><div class="card-title">馃尅锔?褰撳墠娓╁害</div><div class="temp-big" id="temp-display">-- 掳C</div></div>' +
+      '<div class="card"><button class="btn btn-primary" id="btn-refresh-temp" onclick="requestTemp()" disabled>鍒锋柊娓╁害</button></div>' +
+      unbind;
+  } else if (type === 'jishe') {
+    statusGrid.innerHTML =
+      '<div class="status-item"><span class="status-label">璁惧</span><span id="dev-status" class="badge bg-waiting">绛夊緟杩炴帴</span></div>' +
+      '<div class="status-item"><span class="status-label">鐓ф槑鐏?/span><span id="lamp-status" class="badge bg-waiting">鏈煡</span></div>' +
+      '<div class="status-item"><span class="status-label">姘翠綅</span><span id="water-status" class="badge bg-waiting">绛夊緟</span></div>' +
+      '<div class="status-item"><span class="status-label">鍏夌嚎</span><span id="light-status" class="badge bg-waiting">鏈煡</span></div>';
+    panels.innerHTML =
+      '<div class="card"><div class="card-title">馃敀 闂ㄧ</div><button class="btn btn-primary" id="btn-open" onclick="controlOpen()" disabled>杩滅▼寮€闂?/button></div>' +
+      '<div class="card"><div class="card-title">馃挕 鐓ф槑鐏?/div><button id="btn-lamp" class="btn btn-success" onclick="toggleLamp()" disabled>寮€鍏崇伅</button></div>' +
+      '<div class="card"><div class="card-title">鈴?瀹氭椂</div><label style="display:flex;align-items:center;font-size:14px;margin-bottom:12px"><input type="checkbox" id="timer-enable"> 寮€鍚畾鏃?/label>' +
+      '<div class="timer-inputs"><div class="time-box"><span>寮€濮?/span><input type="time" id="start-time" value="15:00"></div><div class="time-box"><span>缁撴潫</span><input type="time" id="end-time" value="17:30"></div></div>' +
+      '<button class="btn btn-primary" id="btn-timer" onclick="saveTimer()" disabled>淇濆瓨瀹氭椂</button></div>' +
+      '<div class="card" style="background:#fff5f5;border-color:#ffdee0"><div class="card-title" style="color:#ff3b30">馃殌 OTA</div><button class="btn btn-danger" id="btn-ota" onclick="triggerOTA()" disabled>瑙﹀彂OTA</button></div>' + unbind;
+  } else if (type === 'shuibeng') {
+    statusGrid.innerHTML =
+      '<div class="status-item"><span class="status-label">璁惧</span><span id="dev-status" class="badge bg-waiting">绛夊緟杩炴帴</span></div>' +
+      '<div class="status-item"><span class="status-label">姘存车</span><span id="pump-status" class="badge bg-waiting">鏈煡</span></div>';
+    panels.innerHTML =
+      '<div class="card"><div class="card-title">馃挧 姘存车</div><div class="btn-row"><button class="btn btn-success" id="btn-pump-on" onclick="pumpOn()" disabled>寮€娉?/button><button class="btn btn-danger" id="btn-pump-off" onclick="pumpOff()" disabled>鍏虫车</button></div></div>' +
+      '<div class="card"><div class="card-title">鈴?瀹氭椂</div><div class="timer-inputs"><div class="time-box"><span>寮€濮?/span><input type="time" id="start-time" value="06:00"></div><div class="time-box"><span>缁撴潫</span><input type="time" id="end-time" value="06:30"></div></div>' +
+      '<label style="display:flex;align-items:center;font-size:14px;margin-bottom:12px"><input type="checkbox" id="timer-enable"> 寮€鍚畾鏃?/label>' +
+      '<button class="btn btn-primary" id="btn-timer" onclick="saveTimer()" disabled>淇濆瓨瀹氭椂</button></div>' +
+      '<div class="card" style="background:#fff5f5;border-color:#ffdee0"><div class="card-title" style="color:#ff3b30">馃殌 OTA</div><button class="btn btn-danger" id="btn-ota" onclick="triggerOTA()" disabled>瑙﹀彂OTA</button></div>' + unbind;
+  } else if (type === 'juanlianmen') {
+    statusGrid.innerHTML =
+      '<div class="status-item"><span class="status-label">璁惧</span><span id="dev-status" class="badge bg-waiting">绛夊緟杩炴帴</span></div>' +
+      '<div class="status-item"><span class="status-label">闂ㄧ姸鎬?/span><span id="curtain-status" class="badge bg-waiting">鏈煡</span></div>';
+    panels.innerHTML =
+      '<div class="card"><div class="card-title">馃毆 鍗峰笜闂?/div><div class="btn-row"><button class="btn btn-success" id="btn-curtain-open" onclick="curtainOpen()" disabled>寮€甯?/button><button class="btn btn-gray" id="btn-curtain-stop" onclick="curtainStop()" disabled>鍋滄</button><button class="btn btn-danger" id="btn-curtain-close" onclick="curtainClose()" disabled>鍏冲笜</button></div></div>' +
+      '<div class="card"><div class="card-title">鈴?瀹氭椂</div><div class="timer-inputs"><div class="time-box"><span>寮€甯?/span><input type="time" id="start-time" value="07:00"></div><div class="time-box"><span>鍏冲笜</span><input type="time" id="end-time" value="19:00"></div></div>' +
+      '<label style="display:flex;align-items:center;font-size:14px;margin-bottom:12px"><input type="checkbox" id="timer-enable"> 寮€鍚畾鏃?/label>' +
+      '<button class="btn btn-primary" id="btn-timer" onclick="saveTimer()" disabled>淇濆瓨瀹氭椂</button></div>' +
+      '<div class="card" style="background:#fff5f5;border-color:#ffdee0"><div class="card-title" style="color:#ff3b30">馃殌 OTA</div><button class="btn btn-danger" id="btn-ota" onclick="triggerOTA()" disabled>瑙﹀彂OTA</button></div>' + unbind;
+  } else if (type === 'shuangdeng') {
+    statusGrid.innerHTML =
+      '<div class="status-item"><span class="status-label">璁惧</span><span id="dev-status" class="badge bg-waiting">绛夊緟杩炴帴</span></div>' +
+      '<div class="status-item"><span class="status-label">鐏?</span><span id="lamp-status" class="badge bg-waiting">鏈煡</span></div>' +
+      '<div class="status-item"><span class="status-label">鐏?</span><span id="lamp2-status" class="badge bg-waiting">鏈煡</span></div>' +
+      '<div class="status-item"><span class="status-label">姘存车</span><span id="pump-status" class="badge bg-waiting">鏈煡</span></div>';
+    panels.innerHTML =
+      '<div class="card"><div class="card-title">馃挕 鐏?</div><button id="btn-lamp" class="btn btn-success" onclick="toggleLamp()" disabled>寮€鍏崇伅1</button></div>' +
+      '<div class="card"><div class="card-title">馃挕 鐏?</div><button id="btn-lamp2" class="btn btn-success" onclick="toggleLamp2()" disabled>寮€鍏崇伅2</button></div>' +
+      '<div class="card"><div class="card-title">馃挧 姘存车</div><div class="btn-row"><button class="btn btn-success" id="btn-pump-on" onclick="pumpOnMulti()" disabled>寮€娉?/button><button class="btn btn-danger" id="btn-pump-off" onclick="pumpOffMulti()" disabled>鍏虫车</button></div></div>' +
+      '<div class="card"><div class="card-title">鈴?瀹氭椂(鐏?)</div><label style="display:flex;align-items:center;font-size:14px;margin-bottom:12px"><input type="checkbox" id="timer-enable"> 寮€鍚畾鏃?/label>' +
+      '<div class="timer-inputs"><div class="time-box"><span>寮€濮?/span><input type="time" id="start-time" value="15:00"></div><div class="time-box"><span>缁撴潫</span><input type="time" id="end-time" value="17:30"></div></div>' +
+      '<button class="btn btn-primary" id="btn-timer" onclick="saveTimer()" disabled>淇濆瓨瀹氭椂</button></div>' +
+      '<div class="card" style="background:#fff5f5;border-color:#ffdee0"><div class="card-title" style="color:#ff3b30">馃殌 OTA</div><button class="btn btn-danger" id="btn-ota" onclick="triggerOTA()" disabled>瑙﹀彂OTA</button></div>' + unbind;
+  } else {
+    statusGrid.innerHTML = '<div class="status-item"><span class="status-label">璁惧</span><span id="dev-status" class="badge bg-waiting">绛夊緟杩炴帴</span></div>';
+    panels.innerHTML =
+      '<div class="card"><div class="card-title">閫氱敤鎺у埗</div><div class="btn-row" style="margin-bottom:10px"><button class="btn btn-success" id="btn-on1" onclick="publish(\'ON1\')" disabled>缁х數鍣?寮€</button><button class="btn btn-danger" id="btn-off1" onclick="publish(\'OFF1\')" disabled>缁х數鍣?鍏?/button></div>' +
+      '<button class="btn btn-primary" id="btn-on2" onclick="publish(\'OPEN2\')" disabled>缁х數鍣?瑙﹀彂</button></div>' +
+      '<div class="card" style="background:#fff5f5;border-color:#ffdee0"><div class="card-title" style="color:#ff3b30">馃殌 OTA</div><button class="btn btn-danger" id="btn-ota" onclick="triggerOTA()" disabled>瑙﹀彂OTA</button></div>' + unbind;
+  }
+  lampState = false; lamp2State = false; pumpState = false; latestTemp = null;
+}
+
+function getAllBtns() {
+  return ['btn-open', 'btn-lamp', 'btn-lamp2', 'btn-timer', 'btn-ota', 'btn-pump-on', 'btn-pump-off',
+    'btn-curtain-open', 'btn-curtain-stop', 'btn-curtain-close', 'btn-on1', 'btn-off1', 'btn-on2', 'btn-refresh-temp']
+    .filter(id => document.getElementById(id));
+}
+function setButtonsEnabled(en) {
+  getAllBtns().forEach(id => { const b = document.getElementById(id); if (b) b.disabled = !en; });
+}
+
+function disconnectMQTT() {
+  if (client) { try { client.end(true); } catch (_) {} client = null; }
+  if (offlineCheckTimer) { clearInterval(offlineCheckTimer); offlineCheckTimer = null; }
+  mqttConnected = false; lastHeartbeat = 0;
+}
+
+function initMQTT() {
+  // door_ 璁惧鐢?door/ 涓婚锛孍SP_ 鐢ㄥ師鏉ョ殑 home/esp8266/
+  if (isDoorDevice(deviceId)) {
+    cmdTopic = 'door/' + deviceId + '/cmd';
+    statusTopic = 'door/' + deviceId + '/status';
+  } else {
+    cmdTopic = 'home/esp8266/cmd/' + deviceId;
+    statusTopic = 'home/esp8266/status/' + deviceId;
+  }
+  disconnectMQTT();
+  client = mqtt.connect(MQTT_HOST, {
+    clientId: 'web_' + Math.random().toString(16).slice(2, 10),
+    username: 'eps8266nn', password: 'yu155414',
+    reconnectPeriod: 4000, connectTimeout: 8000, keepalive: 60
+  });
+  client.on('connect', () => {
+    mqttConnected = true;
+    setBanner('鉁?浜戠宸茶繛鎺?, '#34c759');
+    client.subscribe(statusTopic, { qos: 1 });
+    if (isDoorDevice(deviceId)) {
+      setTimeout(() => publish('STATUS'), 600);
+    } else {
+      setTimeout(() => publish('WHO_IS_ONLINE'), 600);
+    }
+    startOfflineWatch();
+  });
+  client.on('reconnect', () => setBanner('馃攧 閲嶈繛涓?..', '#ff9500'));
+  client.on('close', () => {
+    mqttConnected = false;
+    setBanner('鈿狅笍 鏂紑', '#ff3b30');
+    setButtonsEnabled(false);
+    setEl('dev-status', 'badge bg-offline', '宸茬绾?);
+  });
+  client.on('error', err => setBanner('閿欒: ' + err.message, '#ff3b30'));
+  client.on('message', (topic, message) => {
+    if (topic !== statusTopic) return;
+    const msg = message.toString().trim();
+    lastHeartbeat = Date.now();
+    const ds = document.getElementById('dev-status');
+    if (ds) { ds.className = 'badge bg-online'; ds.textContent = '鍦ㄧ嚎'; }
+    setButtonsEnabled(true);
+    handleMessage(msg);
+  });
+}
+
+function handleMessage(msg) {
+  const type = getDeviceType(deviceId);
+
+  // 灏濊瘯瑙ｆ瀽 JSON锛堟俯搴︿紶鎰熷櫒锛?  if (msg.startsWith('{')) {
+    try {
+      const data = JSON.parse(msg);
+      if (data.temperature !== undefined && data.temperature !== null) {
+        latestTemp = Number(data.temperature);
+        const el = document.getElementById('temp-display');
+        if (el) el.textContent = latestTemp.toFixed(1) + ' 掳C';
+        if (data.sensor_ok === false) {
+          setEl('sensor-status', 'badge bg-warning', '寮傚父');
+        } else {
+          setEl('sensor-status', 'badge bg-online', '姝ｅ父');
+        }
+        if (data.online === false) {
+          setEl('dev-status', 'badge bg-offline', '绂荤嚎');
+        }
+        return;
+      }
+    } catch (e) { /* 涓嶆槸鍚堟硶 JSON锛岀户缁寜鏂囨湰澶勭悊 */ }
+  }
+
+  if (msg.startsWith('ONLINE_')) { showToast('馃煝 璁惧涓婄嚎'); return; }
+  if (msg === 'OTA_START') {
+    showToast('馃殌 寮€濮婳TA');
+    const b = document.getElementById('btn-ota');
+    if (b) { b.textContent = '鍗囩骇涓?..'; b.disabled = true; }
+    return;
+  }
+  if (msg === 'OTA_OK') {
+    const b = document.getElementById('btn-ota');
+    if (b) { b.textContent = '瑙﹀彂OTA'; b.disabled = false; }
+    showToast('鉁?OTA鎴愬姛'); return;
+  }
+  if (msg === 'OTA_FAIL') {
+    const b = document.getElementById('btn-ota');
+    if (b) { b.textContent = '瑙﹀彂OTA'; b.disabled = false; }
+    showToast('鉂?OTA澶辫触'); return;
+  }
+  if (msg === 'OTA_NO_NEW') {
+    const b = document.getElementById('btn-ota');
+    if (b) b.disabled = false;
+    showToast('鈩癸笍 宸叉槸鏈€鏂?); return;
+  }
+
+  if (type === 'jishe') {
+    if (msg === 'ON1') { lampState = true; setEl('lamp-status', 'badge bg-online', '宸插紑'); setBtn('btn-lamp', '鍏崇伅', 'btn btn-danger'); }
+    else if (msg === 'OFF1') { lampState = false; setEl('lamp-status', 'badge bg-offline', '宸插叧'); setBtn('btn-lamp', '寮€鐏?, 'btn btn-success'); }
+    else if (msg === 'WATER_LOW_ALARM') { setEl('water-status', 'badge bg-warning', '缂烘按'); showToast('鈿狅笍 缂烘按'); }
+    else if (msg === 'WATER_NORMAL') { setEl('water-status', 'badge bg-online', '姝ｅ父'); }
+    else if (msg === 'DARK') { setEl('light-status', 'badge bg-dark', '鏆?); }
+    else if (msg === 'BRIGHT') { setEl('light-status', 'badge bg-bright', '浜?); }
+    else if (msg === 'LOCK_TRIGGERED') { showToast('馃敀 闂ㄩ攣宸茶Е鍙?); }
+    else if (msg.startsWith('TIMER_INFO_')) {
+      const p = msg.split('_');
+      if (p.length >= 5) {
+        const tc = document.getElementById('timer-enable');
+        const st = document.getElementById('start-time');
+        const et = document.getElementById('end-time');
+        if (tc) tc.checked = p[2] === '1';
+        if (st) st.value = p[3];
+        if (et) et.value = p[4];
+        showToast('瀹氭椂宸插悓姝?);
+      }
+    }
+  }
+  if (type === 'shuibeng') {
+    if (msg === 'PUMP_ON' || msg === 'ON1') { pumpState = true; setEl('pump-status', 'badge bg-online', '杩愯涓?); }
+    else if (msg === 'PUMP_OFF' || msg === 'OFF1') { pumpState = false; setEl('pump-status', 'badge bg-offline', '宸插仠姝?); }
+  }
+  if (type === 'juanlianmen') {
+    if (msg === 'CURTAIN_OPEN') setEl('curtain-status', 'badge bg-online', '宸插紑');
+    else if (msg === 'CURTAIN_CLOSE') setEl('curtain-status', 'badge bg-offline', '宸插叧');
+    else if (msg === 'CURTAIN_STOP') setEl('curtain-status', 'badge bg-warning', '鍋滄');
+  }
+  if (type === 'shuangdeng') {
+    if (msg === 'ON1') { lampState = true; setEl('lamp-status', 'badge bg-online', '宸插紑'); setBtn('btn-lamp', '鍏崇伅1', 'btn btn-danger'); }
+    else if (msg === 'OFF1') { lampState = false; setEl('lamp-status', 'badge bg-offline', '宸插叧'); setBtn('btn-lamp', '寮€鐏?', 'btn btn-success'); }
+    else if (msg === 'ON2') { lamp2State = true; setEl('lamp2-status', 'badge bg-online', '宸插紑'); setBtn('btn-lamp2', '鍏崇伅2', 'btn btn-danger'); }
+    else if (msg === 'OFF2') { lamp2State = false; setEl('lamp2-status', 'badge bg-offline', '宸插叧'); setBtn('btn-lamp2', '寮€鐏?', 'btn btn-success'); }
+    else if (msg === 'PUMP_ON') { pumpState = true; setEl('pump-status', 'badge bg-online', '杩愯涓?); }
+    else if (msg === 'PUMP_OFF') { pumpState = false; setEl('pump-status', 'badge bg-offline', '宸插仠姝?); }
+  }
+}
+
+function publish(cmd) {
+  if (!client || !client.connected) { showToast('鈿狅笍 鏈繛鎺?); return; }
+  client.publish(cmdTopic, cmd, { qos: 1 });
+}
+function requestTemp() { publish('STATUS'); showToast('宸茶姹傛俯搴?); }
+function controlOpen() { if (!confirm('纭畾寮€闂紵')) return; publish('OPEN2'); }
+function toggleLamp() { publish(lampState ? 'OFF1' : 'ON1'); }
+function toggleLamp2() { publish(lamp2State ? 'OFF2' : 'ON2'); }
+function pumpOn() { if (!confirm('纭畾寮€娉碉紵')) return; publish('ON1'); }
+function pumpOff() { if (!confirm('纭畾鍏虫车锛?)) return; publish('OFF1'); }
+function pumpOnMulti() { if (!confirm('纭畾寮€娉碉紵')) return; publish('PUMP_ON'); }
+function pumpOffMulti() { if (!confirm('纭畾鍏虫车锛?)) return; publish('PUMP_OFF'); }
+function curtainOpen() { publish('OPEN1'); }
+function curtainStop() { publish('STOP1'); }
+function curtainClose() { publish('CLOSE1'); }
+function triggerOTA() { if (!confirm('纭畾OTA鍗囩骇锛熻鍕挎柇鐢?)) return; publish('DO_OTA_UPDATE'); }
+function saveTimer() {
+  const e = document.getElementById('timer-enable')?.checked ? 1 : 0;
+  const s = document.getElementById('start-time')?.value;
+  const d = document.getElementById('end-time')?.value;
+  if (!s || !d) { showToast('璇峰～鍐欐椂闂?); return; }
+  publish('SET_TIMER_' + e + '_' + s + '_' + d);
+  showToast('鉁?瀹氭椂宸插彂閫?);
+}
+function setEl(id, cls, text) { const el = document.getElementById(id); if (el) { el.className = cls; el.textContent = text; } }
+function setBtn(id, text, cls) { const el = document.getElementById(id); if (el) { el.textContent = text; el.className = cls; } }
+function setBanner(text, color) { const el = document.getElementById('mqtt-banner'); if (el) { el.textContent = text; el.style.color = color; } }
+function startOfflineWatch() {
+  if (offlineCheckTimer) clearInterval(offlineCheckTimer);
+  offlineCheckTimer = setInterval(() => {
+    if (lastHeartbeat && Date.now() - lastHeartbeat > OFFLINE_MS) {
+      setEl('dev-status', 'badge bg-offline', '宸茬绾?);
+      setButtonsEnabled(false);
+    }
+  }, 30000);
+}
+
+// ===== 椤甸潰 =====
+async function loadPages() {
+  try {
+    const pages = await backendActor.getPages(optSession());
+    const c = document.getElementById('page-list-container');
+    c.innerHTML = '';
+    document.getElementById('page-detail').classList.add('hidden');
+    document.getElementById('page-create-card').classList.remove('hidden');
+    if (!pages.length) {
+      c.innerHTML = '<div style="color:#8e8e93;font-size:13px;margin-bottom:10px">鏆傛棤椤甸潰</div>';
+      return;
+    }
+    pages.forEach(function (p) {
+      const item = document.createElement('div');
+      item.className = 'device-list-item';
+      const info = document.createElement('div');
+      info.className = 'device-info';
+      const nameDiv = document.createElement('div');
+      nameDiv.className = 'device-name';
+      nameDiv.textContent = p.title;
+      const idDiv = document.createElement('div');
+      idDiv.className = 'device-id';
+      idDiv.textContent = '璁惧: ' + p.deviceId + ' 路 ID:' + p.id;
+      info.appendChild(nameDiv); info.appendChild(idDiv);
+      const actions = document.createElement('div');
+      actions.className = 'device-actions';
+      const btnOpen = document.createElement('button');
+      btnOpen.className = 'btn-ctrl'; btnOpen.textContent = '鎵撳紑';
+      btnOpen.onclick = function () { openPage(Number(p.id), p.title); };
+      const btnDel = document.createElement('button');
+      btnDel.className = 'btn-edit'; btnDel.textContent = '鍒犻櫎';
+      btnDel.onclick = function () { deletePage(Number(p.id)); };
+      actions.appendChild(btnOpen); actions.appendChild(btnDel);
+      item.appendChild(info); item.appendChild(actions);
+      c.appendChild(item);
+    });
+  } catch (e) { showToast('鑾峰彇椤甸潰澶辫触: ' + e.message); }
+}
+
+async function createPage() {
+  const deviceIdVal = document.getElementById('new-page-device').value.trim();
+  const title = document.getElementById('new-page-title').value.trim();
+  if (!deviceIdVal || !title) return showToast('璇峰～鍐欒澶嘔D鍜屾爣棰?);
+  try {
+    const res = await backendActor.createPage(deviceIdVal, title, optSession());
+    if (res.err) return showToast('鉂?' + res.err);
+    showToast('鉁?椤甸潰宸插垱寤?);
+    document.getElementById('new-page-device').value = '';
+    document.getElementById('new-page-title').value = '';
+    loadPages();
+  } catch (e) { showToast('鉂?' + e.message); }
+}
+
+async function deletePage(id) {
+  if (!confirm('纭畾鍒犻櫎璇ラ〉闈㈠強鎵€鏈夋帶浠讹紵')) return;
+  try {
+    const res = await backendActor.deletePage(BigInt(id), optSession());
+    if (res.err) return showToast('鉂?' + res.err);
+    showToast('鉁?宸插垹闄?); loadPages();
+  } catch (e) { showToast('鉂?' + e.message); }
+}
+
+async function openPage(id, title) {
+  currentPageId = id;
+  document.getElementById('page-list-container').innerHTML = '';
+  document.getElementById('page-create-card').classList.add('hidden');
+  document.getElementById('page-detail').classList.remove('hidden');
+  document.getElementById('cur-page-title').textContent = title;
+  loadComponents(id);
+}
+function backPageList() {
+  document.getElementById('page-detail').classList.add('hidden');
+  loadPages();
+}
+
+async function loadComponents(pageId) {
+  try {
+    const list = await backendActor.getComponents(BigInt(pageId), optSession());
+    const c = document.getElementById('component-list-container');
+    c.innerHTML = '';
+    if (!list.length) {
+      c.innerHTML = '<div style="color:#8e8e93;font-size:13px;margin-bottom:10px">鏆傛棤鎺т欢</div>';
+      return;
+    }
+    list.forEach(function (comp) {
+      const item = document.createElement('div');
+      item.className = 'device-list-item';
+      const info = document.createElement('div');
+      info.className = 'device-info';
+      const nameDiv = document.createElement('div');
+      nameDiv.className = 'device-name'; nameDiv.textContent = comp.title;
+      const typeDiv = document.createElement('div');
+      typeDiv.className = 'device-id'; typeDiv.textContent = comp.componentType + ' 路 sort:' + comp.sort;
+      const cfgDiv = document.createElement('div');
+      cfgDiv.className = 'device-id'; cfgDiv.textContent = comp.config;
+      info.appendChild(nameDiv); info.appendChild(typeDiv); info.appendChild(cfgDiv);
+      const btnDel = document.createElement('button');
+      btnDel.className = 'btn-edit'; btnDel.textContent = '鍒犻櫎';
+      btnDel.onclick = function () { deleteComponent(Number(comp.id)); };
+      item.appendChild(info); item.appendChild(btnDel);
+      c.appendChild(item);
+    });
+  } catch (e) { showToast('鑾峰彇鎺т欢澶辫触: ' + e.message); }
+}
+
+async function createComponent() {
+  if (currentPageId == null) return showToast('璇峰厛鎵撳紑椤甸潰');
+  const type = document.getElementById('new-comp-type').value;
+  const title = document.getElementById('new-comp-title').value.trim();
+  const config = document.getElementById('new-comp-config').value.trim() || '{}';
+  const sort = Number(document.getElementById('new-comp-sort').value || 1);
+  if (!title) return showToast('璇峰～鍐欐帶浠跺悕绉?);
+  try {
+    const res = await backendActor.createComponent(BigInt(currentPageId), type, title, config, BigInt(sort), optSession());
+    if (res.err) return showToast('鉂?' + res.err);
+    showToast('鉁?鎺т欢宸叉坊鍔?);
+    document.getElementById('new-comp-title').value = '';
+    document.getElementById('new-comp-config').value = '';
+    loadComponents(currentPageId);
+  } catch (e) { showToast('鉂?' + e.message); }
+}
+
+async function deleteComponent(id) {
+  if (!confirm('纭畾鍒犻櫎璇ユ帶浠讹紵')) return;
+  try {
+    const res = await backendActor.deleteComponent(BigInt(id), optSession());
+    if (res.err) return showToast('鉂?' + res.err);
+    showToast('鉁?宸插垹闄?); loadComponents(currentPageId);
+  } catch (e) { showToast('鉂?' + e.message); }
+}   
+// ===== 瑙勫垯 =====
+async function loadRules() {
+  try {
+    const rules = await backendActor.getRules(optSession());
+    const c = document.getElementById('rule-list-container');
+    c.innerHTML = '';
+    if (!rules.length) {
+      c.innerHTML = '<div style="color:#8e8e93;font-size:13px;margin-bottom:10px">鏆傛棤瑙勫垯</div>';
+      return;
+    }
+    rules.forEach(function (r) {
+      const item = document.createElement('div');
+      item.className = 'device-list-item';
+
+      const info = document.createElement('div');
+      info.className = 'device-info';
+
+      const nameDiv = document.createElement('div');
+      nameDiv.className = 'device-name';
+      nameDiv.textContent = r.trigger + ' 鈫?' + r.action;
+
+      const sub1 = document.createElement('div');
+      sub1.className = 'device-id';
+      sub1.textContent =
+        '璁惧:' + r.deviceId +
+        ' 路 ' + (r.enable ? '馃煝 鍚敤涓? : '鈿?宸插仠鐢?) +
+        ' 路 浼樺厛绾?' + r.priority +
+        ' 路 ID:' + r.id;
+
+      const sub2 = document.createElement('div');
+      sub2.className = 'device-id';
+      sub2.textContent = '鏉′欢: ' + r.condition;
+
+      info.appendChild(nameDiv);
+      info.appendChild(sub1);
+      info.appendChild(sub2);
+
+      const actions = document.createElement('div');
+      actions.className = 'device-actions';
+
+      const btnToggle = document.createElement('button');
+      btnToggle.className = 'btn-edit';
+      btnToggle.textContent = r.enable ? '鍋滅敤' : '鍚敤';
+      btnToggle.onclick = function () {
+        setRuleEnable(Number(r.id), !r.enable, r);
+      };
+
+      const btnDel = document.createElement('button');
+      btnDel.className = 'btn-edit';
+      btnDel.textContent = '鍒犻櫎';
+      btnDel.onclick = function () {
+        deleteRule(Number(r.id));
+      };
+
+      actions.appendChild(btnToggle);
+      actions.appendChild(btnDel);
+      item.appendChild(info);
+      item.appendChild(actions);
+      c.appendChild(item);
+    });
+  } catch (e) {
+    showToast('鑾峰彇瑙勫垯澶辫触: ' + e.message);
+  }
+}
+
+async function setRuleEnable(ruleId, enable, rule) {
+  try {
+    const res = await backendActor.updateRule(
+      BigInt(ruleId),
+      enable,
+      rule.trigger,
+      rule.condition,
+      rule.action,
+      BigInt(rule.priority),
+      optSession()
+    );
+    if (res.err) return showToast('鉂?' + res.err);
+    showToast(enable ? '鉁?瑙勫垯宸插惎鐢? : '鉁?瑙勫垯宸插仠鐢?);
+    loadRules();
+  } catch (e) {
+    showToast('鉂?' + e.message);
+  }
+}
+
+async function createRule() {
+  const deviceIdVal = document.getElementById('new-rule-device').value.trim();
+  const trigger = document.getElementById('new-rule-trigger').value.trim();
+  const condition = document.getElementById('new-rule-condition').value.trim();
+  const action = document.getElementById('new-rule-action').value.trim();
+  const priority = Number(document.getElementById('new-rule-priority').value || 10);
+  const enable = document.getElementById('new-rule-enable').checked;
+  if (!deviceIdVal || !trigger || !condition || !action) return showToast('璇峰～鍐欏畬鏁磋鍒?);
+  try {
+    const res = await backendActor.createRule(deviceIdVal, enable, trigger, condition, action, BigInt(priority), optSession());
+    if (res.err) return showToast('鉂?' + res.err);
+    showToast('鉁?瑙勫垯宸插垱寤?);
+    loadRules();
+  } catch (e) {
+    showToast('鉂?' + e.message);
+  }
+}
+
+async function deleteRule(id) {
+  if (!confirm('纭畾鍒犻櫎璇ヨ鍒欙紵')) return;
+  try {
+    const res = await backendActor.deleteRule(BigInt(id), optSession());
+    if (res.err) return showToast('鉂?' + res.err);
+    showToast('鉁?宸插垹闄?);
+    loadRules();
+  } catch (e) {
+    showToast('鉂?' + e.message);
+  }
+}
+// 鍏ㄥ眬
+window.switchAuthTab = switchAuthTab;
+window.emailLogin = emailLogin; window.emailRegister = emailRegister;
+window.iiLogin = iiLogin; window.logout = logout;
+window.switchMainTab = switchMainTab;
+window.showAccountSecurity = showAccountSecurity; window.backFromAccount = backFromAccount;
+window.bindII = bindII; window.setNewPassword = setNewPassword; window.doBindEmail = doBindEmail;
+window.showBindForm = showBindForm; window.cancelBind = cancelBind; window.bindDevice = bindDevice;
+window.showRename = showRename; window.cancelRename = cancelRename; window.confirmRename = confirmRename;
+window.selectType = selectType; window.selectTypeRename = selectTypeRename;
+window.selectDevice = selectDevice; window.backToList = backToList; window.unbindCurrentDevice = unbindCurrentDevice;
+window.publish = publish; window.requestTemp = requestTemp;
+window.controlOpen = controlOpen; window.toggleLamp = toggleLamp; window.toggleLamp2 = toggleLamp2;
+window.pumpOn = pumpOn; window.pumpOff = pumpOff; window.pumpOnMulti = pumpOnMulti; window.pumpOffMulti = pumpOffMulti;
+window.curtainOpen = curtainOpen; window.curtainStop = curtainStop; window.curtainClose = curtainClose;
+window.saveTimer = saveTimer; window.triggerOTA = triggerOTA;
+window.createPage = createPage; window.deletePage = deletePage; window.openPage = openPage; window.backPageList = backPageList;
+window.createComponent = createComponent; window.deleteComponent = deleteComponent;
+window.createRule = createRule;
+window.deleteRule = deleteRule;
+window.setRuleEnable = setRuleEnable;
+
+init();
+</script>
+</body>
+</html>
