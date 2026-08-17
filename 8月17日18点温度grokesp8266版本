@@ -1,6 +1,6 @@
 /*
- * ESP8266 D1 Mini 温度传感器 - door_ 协议（稳定版）
- * 修复：去掉 wifi_config_password（你现在用手动 WiFi）
+ * ESP8266 D1 Mini 温度传感器 - door_ 协议（最终可用版）
+ * 2026 年 8 月 - 针对你这个代码修复
  */
 
 #include <ESP8266WiFi.h>
@@ -52,18 +52,12 @@ void setLoRaMode() {
 
 void publishStatus(bool online) {
   if (!mqttClient.connected()) return;
-
   StaticJsonDocument<192> doc;
   doc["online"] = online;
   doc["sensor_ok"] = sensorOk;
   doc["unit"] = "°C";
-
-  if (sensorOk) {
-    doc["temperature"] = latestTemp;
-  } else {
-    doc["temperature"] = nullptr;
-  }
-
+  if (sensorOk) doc["temperature"] = latestTemp;
+  else doc["temperature"] = nullptr;
   char payload[256];
   serializeJson(doc, payload);
   mqttClient.publish(topicStatus.c_str(), payload, true);
@@ -82,13 +76,8 @@ void sendLoRaData() {
   doc["id"] = deviceId;
   doc["ok"] = sensorOk;
   doc["ts"] = millis() / 1000;
-
-  if (sensorOk) {
-    doc["temp"] = latestTemp;
-  } else {
-    doc["temp"] = nullptr;
-  }
-
+  if (sensorOk) doc["temp"] = latestTemp;
+  else doc["temp"] = nullptr;
   char json[160];
   serializeJson(doc, json);
   LoRaSerial.println(json);
@@ -98,15 +87,9 @@ void sendLoRaData() {
 void finishConversion() {
   convPending = false;
   latestTemp = sensors.getTempCByIndex(0);
-
   sensorOk = (latestTemp > -55.0 && latestTemp < 125.0 && !isnan(latestTemp));
-
-  if (sensorOk) {
-    Serial.printf("温度: %.2f °C\n", latestTemp);
-  } else {
-    Serial.println("DS18B20 读取失败");
-  }
-
+  if (sensorOk) Serial.printf("温度: %.2f °C\n", latestTemp);
+  else Serial.println("DS18B20 读取失败");
   sendLoRaData();
   if (mqttClient.connected()) publishStatus(true);
 }
@@ -135,25 +118,30 @@ void reconnectMQTT() {
 
 void setup() {
   Serial.begin(115200);
-  LoRaSerial.begin(9600);
+  delay(2000);
 
-  pinMode(LORA_M0, OUTPUT);
-  pinMode(LORA_M1, OUTPUT);
+  Serial.println();
+  Serial.println("==============================");
+  Serial.println("ESP8266 D1 Mini 温度传感器启动");
+  Serial.println("==============================");
+
+  LoRaSerial.begin(9600);
+  Serial.println("LoRaSerial OK");
+
   setLoRaMode();
+  Serial.println("LoRa 模式 OK");
 
   deviceId = "door_" + String(ESP.getChipId(), HEX);
   topicCmd = "door/" + deviceId + "/cmd";
   topicStatus = "door/" + deviceId + "/status";
+  Serial.println("设备ID: " + deviceId);
 
-  Serial.println("Device ID: " + deviceId);
-
-  // ==================== 配网（手动 WiFi）===================
-  WiFi.disconnect(true);
- WiFi.mode(WIFI_AP);
+  // ==================== WiFi + WiFiManager（关键修复）===================
+  WiFi.disconnect(true);                    // 清除旧配置
+  WiFi.mode(WIFI_MODE_AP);                  // 强制进 AP 模式
   delay(1000);
 
-  WiFi.softAP("TEMP_SENSOR_ESP8266", "12345678");   // 配网密码（随便填，配完就改）
-
+  WiFi.softAP("TEMP_SENSOR_ESP8266", "12345678");   // 配网密码
   Serial.println("AP 已启动！IP: 192.168.4.1");
 
   WiFiManager wifiManager;
@@ -165,11 +153,10 @@ void setup() {
 
   Serial.println("5 OK: WiFi 配网成功");
 
-  // ==================== 配网成功后的设置 ====================
   WiFi.setSleep(false);
   WiFi.setAutoReconnect(true);
 
-  // MQTT 设置
+  // MQTT 初始化
   reconnectMQTT();
   Serial.println("6 OK: MQTT init");
 
