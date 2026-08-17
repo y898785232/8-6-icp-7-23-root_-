@@ -149,7 +149,7 @@ void setup() {
 
   // ==================== 配网（手动 WiFi）===================
   WiFi.disconnect(true);
-  WiFi.mode(WIFI_MODE_AP);
+ WiFi.mode(WIFI_AP);
   delay(1000);
 
   WiFi.softAP("TEMP_SENSOR_ESP8266", "12345678");   // 配网密码（随便填，配完就改）
