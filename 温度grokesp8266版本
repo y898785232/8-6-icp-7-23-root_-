@@ -1,0 +1,276 @@
+/*
+ * ESP8266 D1 Mini 温度传感器 - door_ 协议（2026 稳定版）
+ * 针对 Wemos D1 Mini + BearSSL TLS 优化
+ */
+
+#include <ESP8266WiFi.h>
+#include <WiFiClientSecure.h>
+#include <PubSubClient.h>
+#include <WiFiManager.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <HardwareSerial.h>
+#include <ArduinoJson.h>
+
+#include "esp_task_wdt.h"
+
+// ========== 引脚（D1 Mini 标准）==========
+#define ONE_WIRE_BUS 4
+#define LORA_RX 6
+#define LORA_TX 7
+
+// ========== MQTT（你的真实账号）==========
+const char* mqtt_server = "b7fea2bf.ala.asia-southeast1.emqxsl.com";
+const uint16_t mqtt_port = 8883;
+const char* mqtt_user = "eps8266nn";
+const char* mqtt_pass = "yu155414";
+const char* wifi_config_password = "12345678";
+
+HardwareSerial LoRaSerial(1);
+
+WiFiClientSecure secureClient;
+PubSubClient mqttClient(secureClient);
+
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
+
+String deviceId;
+String topicCmd;
+String topicStatus;
+
+const unsigned long SAMPLE_INTERVAL = 60000UL;
+const unsigned long WIFI_RESTART_AFTER = 120000UL;
+const uint32_t WATCHDOG_TIMEOUT_SECONDS = 30;
+
+unsigned long lastSample = 0;
+unsigned long convStart = 0;
+unsigned long lastWifiTry = 0;
+unsigned long wifiLostAt = 0;
+bool convPending = false;
+float latestTemp = 0.0;
+bool sensorOk = false;
+
+// ========== 看门狗（ESP8266 版本）=========
+void initWatchdog() {
+  if (ESP8266TaskWdt::getMaxTimeout() < WATCHDOG_TIMEOUT_SECONDS) {
+    ESP8266TaskWdt::setMaxTimeout(WATCHDOG_TIMEOUT_SECONDS);
+  }
+  ESP8266TaskWdt::add(ESP8266TaskWdt::getCore0Task());
+}
+
+void feedWatchdog() {
+  ESP8266TaskWdt::reset();
+}
+
+// ========== LoRa & 设备 ID ==========
+void setLoRaMode() {
+  pinMode(LORA_M0, OUTPUT);
+  pinMode(LORA_M1, OUTPUT);
+  digitalWrite(LORA_M0, LOW);
+  digitalWrite(LORA_M1, LOW);
+  delay(50);
+}
+
+String makeDeviceId() {
+  uint32_t id = ESP.getChipId();
+  char buf[16];
+  sprintf(buf, "%06x", id);
+  return String("door_") + String(buf);
+}
+
+// ========== MQTT & 数据函数 ==========
+void publishStatus(bool online) {
+  if (!mqttClient.connected()) return;
+  StaticJsonDocument<256> doc;
+  doc["online"] = online;
+  doc["sensor_ok"] = sensorOk;
+  doc["unit"] = "°C";
+  doc["id"] = deviceId;
+  if (sensorOk) doc["temperature"] = latestTemp;
+  else doc["temperature"] = nullptr;
+  char payload[256];
+  serializeJson(doc, payload);
+  mqttClient.publish(topicStatus.c_str(), payload, true);
+  Serial.printf("MQTT → %s : %s\n", topicStatus.c_str(), payload);
+}
+
+void sendLoRaData() {
+  StaticJsonDocument<160> doc;
+  doc["id"] = deviceId;
+  doc["ok"] = sensorOk;
+  doc["ts"] = millis() / 1000;
+  if (sensorOk) doc["temp"] = latestTemp;
+  else doc["temp"] = nullptr;
+  char json[180];
+  serializeJson(doc, json);
+  LoRaSerial.println(json);
+  Serial.printf("LoRa → %s\n", json);
+}
+
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  String command;
+  for (unsigned int i = 0; i < length; i++) command += (char)payload[i];
+  command.trim();
+  Serial.printf("收到 MQTT 指令: %s\n", command.c_str());
+  if (command == "STATUS") {
+    sendLoRaData();
+    publishStatus(true);
+  }
+}
+
+void finishConversion() {
+  convPending = false;
+  latestTemp = sensors.getTempCByIndex(0);
+  sensorOk = (latestTemp > -55.0 && latestTemp < 125.0 && !isnan(latestTemp));
+  if (sensorOk) Serial.printf("温度: %.2f °C\n", latestTemp);
+  else Serial.println("DS18B20 读取失败");
+  sendLoRaData();
+  if (mqttClient.connected()) publishStatus(true);
+}
+
+void reconnectMQTT() {
+  if (mqttClient.connected()) return;
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  Serial.println("连接 MQTT...");
+
+  if (WiFi.status() == WL_CONNECTED) {
+    secureClient.stop();
+    delay(100);
+    secureClient.setInsecure();   // 测试阶段用，生产建议加真实 CA
+    secureClient.setTimeout(10);
+    mqttClient.setServer(mqtt_server, mqtt_port);
+  }
+
+  Serial.printf("clientId: %s\n", deviceId.c_str());
+
+  if (mqttClient.connect(deviceId.c_str(), mqtt_user, mqtt_pass)) {
+    Serial.println("MQTT 连接成功");
+    mqttClient.subscribe(topicCmd.c_str());
+    publishStatus(true);
+  } else {
+    Serial.printf("MQTT 连接失败, rc=%d\n", mqttClient.state());
+  }
+}
+
+// ========== 主程序 ==========
+void setup() {
+  Serial.begin(115200);
+  delay(2000);
+
+  Serial.println();
+  Serial.println("==============================");
+  Serial.println("ESP8266 D1 Mini 温度传感器启动");
+  Serial.println("==============================");
+
+  setLoRaMode();
+  Serial.println("1 OK: LoRa pins");
+
+  LoRaSerial.begin(9600, SERIAL_8N1, LORA_RX, LORA_TX);
+  Serial.println("2 OK: LoRa serial");
+
+  deviceId = makeDeviceId();
+  topicCmd = "door/" + deviceId + "/cmd";
+  topicStatus = "door/" + deviceId + "/status";
+  Serial.println("设备ID: " + deviceId);
+
+  // ==================== 配网（ESP8266 稳定版）===================
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_MODE_AP);
+  delay(1000);
+
+  WiFi.softAP("TEMP_SENSOR_ESP8266", wifi_config_password);
+  Serial.println("AP 已启动！IP: 192.168.4.1");
+
+  WiFiManager wifiManager;
+  bool wifiOk = wifiManager.startConfigPortal("TEMP_SENSOR_ESP8266", wifi_config_password);
+  if (!wifiOk) {
+    Serial.println("配网失败，自动重启");
+    ESP.restart();
+  }
+
+  Serial.println("5 OK: WiFi 配网成功");
+
+  WiFi.setSleep(false);
+  WiFi.setAutoReconnect(true);
+
+  // 启动看门狗 + MQTT + DS18B20
+  initWatchdog();
+  reconnectMQTT();
+  Serial.println("6 OK: MQTT init");
+
+  sensors.begin();
+  sensors.setResolution(12);
+  sensors.setWaitForConversion(false);
+  sensors.requestTemperatures();
+  convStart = millis();
+  convPending = true;
+  lastSample = millis();
+  Serial.println("7 OK: 启动完成");
+}
+
+void loop() {
+  feedWatchdog();
+
+  // WiFi 断线处理（ESP8266 版）
+  if (WiFi.status() != WL_CONNECTED) {
+    if (wifiLostAt == 0) {
+      wifiLostAt = millis();
+      Serial.println("WiFi 已断开，开始计时恢复");
+    }
+    if (millis() - lastWifiTry > 10000) {
+      lastWifiTry = millis();
+      Serial.println("WiFi 断开，尝试重新连接...");
+      WiFi.disconnect();
+      delay(100);
+      WiFi.reconnect();
+    }
+    if (millis() - wifiLostAt >= WIFI_RESTART_AFTER) {
+      Serial.println("WiFi 超过 2 分钟未恢复，自动重启");
+      ESP.restart();
+    }
+    feedWatchdog();
+    delay(50);
+    return;
+  }
+  if (wifiLostAt != 0) {
+    Serial.println("WiFi 已恢复");
+    wifiLostAt = 0;
+  }
+
+  // MQTT 处理
+  if (!mqttClient.connected()) {
+    static unsigned long lastMqttTry = 0;
+    if (millis() - lastMqttTry > 8000) {
+      lastMqttTry = millis();
+      reconnectMQTT();
+    }
+  } else {
+    mqttClient.loop();
+  }
+
+  unsigned long now = millis();
+
+  // 温度采集
+  if (convPending && (now - convStart >= 900)) {
+    finishConversion();
+  }
+  if (!convPending && (now - lastSample >= SAMPLE_INTERVAL)) {
+    lastSample = now;
+    sensors.requestTemperatures();
+    convStart = millis();
+    convPending = true;
+  }
+
+  // LoRa 指令
+  if (LoRaSerial.available()) {
+    String cmd = LoRaSerial.readStringUntil('\n');
+    cmd.trim();
+    if (cmd.indexOf("STATUS") != -1) {
+      sendLoRaData();
+      if (mqttClient.connected()) publishStatus(true);
+    }
+  }
+
+  delay(10);
+}
