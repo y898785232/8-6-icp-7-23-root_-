@@ -1,12 +1,12 @@
 /*
- * ESP8266 D1 Mini 土壤湿度传感器 - door_ 协议（串口校准版）
+ * ESP8266 D1 Mini Soil Moisture Sensor - door_ protocol
  * 
- * 校准方法（只需一次）：
- *   1. 上传代码，打开串口监视器（波特率 115200）
- *   2. 传感器暴露在干燥空气中，串口发送: CAL_DRY
- *   3. 传感器插入水杯/湿土中，串口发送: CAL_WET
- *   4. 校准值自动保存到 Flash，重启后仍然有效
- *   5. 发送 CAL_SHOW 可查看当前校准值
+ * Calibration (do once, saved to Flash):
+ *   1. Upload, open Serial Monitor (115200 baud, NL line ending)
+ *   2. Leave sensor in dry air, type: CAL_DRY
+ *   3. Put sensor in water/wet soil, type: CAL_WET
+ *   4. Type CAL_SHOW to verify
+ *   5. Type CAL_RESET to clear calibration and restart
  */
 
 #include <ESP8266WiFi.h>
@@ -17,14 +17,12 @@
 #include <ArduinoJson.h>
 #include <EEPROM.h>
 
-// ========== 引脚定义 ==========
 #define SOIL_PIN        A0
 #define LORA_RX         D2
 #define LORA_TX         D1
 #define LORA_M0         D7
 #define LORA_M1         D6
 
-// ========== EEPROM 地址 ==========
 #define ADDR_DRY        0
 #define ADDR_WET        4
 #define ADDR_FLAG       8
@@ -51,18 +49,15 @@ float latestMoisture = 0.0;
 int latestRawAdc = 0;
 bool sensorOk = false;
 
-// 校准值（从 EEPROM 加载或默认）
 int soilDry = 850;
 int soilWet = 50;
 
-// ========== 看门狗 ==========
 void feedWatchdog() {
-  #ifdef ESP8266
-    ESP.wdtFeed();
-  #endif
+#ifdef ESP8266
+  ESP.wdtFeed();
+#endif
 }
 
-// ========== LoRa 初始化 ==========
 void setLoRaMode() {
   pinMode(LORA_M0, OUTPUT);
   pinMode(LORA_M1, OUTPUT);
@@ -71,12 +66,10 @@ void setLoRaMode() {
   delay(100);
 }
 
-// ========== 生成设备 ID ==========
 String makeDeviceId() {
   return "door_" + String(ESP.getChipId(), HEX);
 }
 
-// ========== EEPROM 校准 ==========
 void loadCalibration() {
   EEPROM.begin(512);
   int flag;
@@ -84,9 +77,12 @@ void loadCalibration() {
   if (flag == CAL_FLAG_MAGIC) {
     EEPROM.get(ADDR_DRY, soilDry);
     EEPROM.get(ADDR_WET, soilWet);
-    Serial.printf("✅ 已加载校准值: 干燥=%d, 湿润=%d\n", soilDry, soilWet);
+    Serial.print("Calibration loaded: dry=");
+    Serial.print(soilDry);
+    Serial.print(" wet=");
+    Serial.println(soilWet);
   } else {
-    Serial.println("⚠️ 未校准，使用默认值。请发送 CAL_DRY 和 CAL_WET");
+    Serial.println("Not calibrated. Send CAL_DRY and CAL_WET");
   }
 }
 
@@ -96,10 +92,12 @@ void saveCalibration() {
   int flag = CAL_FLAG_MAGIC;
   EEPROM.put(ADDR_FLAG, flag);
   EEPROM.commit();
-  Serial.printf("💾 校准值已保存: 干燥=%d, 湿润=%d\n", soilDry, soilWet);
+  Serial.print("Calibration saved: dry=");
+  Serial.print(soilDry);
+  Serial.print(" wet=");
+  Serial.println(soilWet);
 }
 
-// ========== 读取土壤湿度 ==========
 void readSoilSensor() {
   long sum = 0;
   for (int i = 0; i < 5; i++) {
@@ -108,24 +106,26 @@ void readSoilSensor() {
   }
   int raw = sum / 5;
   latestRawAdc = raw;
-
   sensorOk = (raw > 0 && raw < 1024);
 
   if (sensorOk) {
-    // 确保 dry > wet，如果用户校准反了自动交换
     int d = max(soilDry, soilWet);
     int w = min(soilDry, soilWet);
     float pct = map(raw, d, w, 0, 100);
     if (pct < 0) pct = 0;
     if (pct > 100) pct = 100;
     latestMoisture = pct;
-    Serial.printf("土壤湿度 raw=%d  →  %.1f%%\n", raw, pct);
+    Serial.print("Soil raw=");
+    Serial.print(raw);
+    Serial.print(" -> ");
+    Serial.print(pct, 1);
+    Serial.println("%");
   } else {
-    Serial.printf("土壤湿度读取异常 raw=%d\n", raw);
+    Serial.print("Soil sensor error raw=");
+    Serial.println(raw);
   }
 }
 
-// ========== 数据上报 ==========
 void publishStatus(bool online) {
   if (!mqttClient.connected()) return;
   StaticJsonDocument<256> doc;
@@ -140,7 +140,8 @@ void publishStatus(bool online) {
   char payload[350];
   serializeJson(doc, payload);
   mqttClient.publish(topicStatus.c_str(), payload, true);
-  Serial.printf("→ MQTT 上报: %s\n", payload);
+  Serial.print("-> MQTT: ");
+  Serial.println(payload);
 }
 
 void sendLoRaData() {
@@ -154,10 +155,10 @@ void sendLoRaData() {
   char json[250];
   serializeJson(doc, json);
   LoRaSerial.println(json);
-  Serial.printf("→ LoRa 发送: %s\n", json);
+  Serial.print("-> LoRa: ");
+  Serial.println(json);
 }
 
-// ========== MQTT 回调 ==========
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   char buf[64];
   if (length >= sizeof(buf)) length = sizeof(buf) - 1;
@@ -166,7 +167,10 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   String command = String(buf);
   command.trim();
 
-  Serial.printf("← MQTT 命令: [%s] %s\n", topic, command.c_str());
+  Serial.print("<- MQTT cmd: [");
+  Serial.print(topic);
+  Serial.print("] ");
+  Serial.println(command);
 
   if (command == "STATUS") {
     readSoilSensor();
@@ -175,11 +179,9 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   }
 }
 
-// ========== MQTT 重连 ==========
 void reconnectMQTT() {
   if (mqttClient.connected()) return;
-
-  Serial.println("连接 MQTT...");
+  Serial.println("Connecting MQTT...");
   secureClient.stop();
   delay(100);
   secureClient.setInsecure();
@@ -187,21 +189,22 @@ void reconnectMQTT() {
   mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setCallback(mqttCallback);
 
-  Serial.printf("clientId: %s\n", deviceId.c_str());
+  Serial.print("clientId: ");
+  Serial.println(deviceId);
 
   if (mqttClient.connect(deviceId.c_str(), mqtt_user, mqtt_pass)) {
-    Serial.println("MQTT 连接成功");
+    Serial.println("MQTT connected");
     mqttClient.subscribe(topicCmd.c_str());
     publishStatus(true);
   } else {
-    Serial.printf("MQTT 连接失败, rc=%d\n", mqttClient.state());
+    Serial.print("MQTT failed, rc=");
+    Serial.println(mqttClient.state());
   }
 }
 
-// ========== WiFi 主动重连 ==========
 void checkWiFi() {
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WiFi 断开，尝试重连...");
+    Serial.println("WiFi lost, reconnecting...");
     WiFi.reconnect();
     unsigned long start = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
@@ -209,12 +212,11 @@ void checkWiFi() {
       feedWatchdog();
     }
     if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("WiFi 重连成功");
+      Serial.println("WiFi reconnected");
     }
   }
 }
 
-// ========== 串口命令处理（校准用）==========
 void handleSerialCommand() {
   if (!Serial.available()) return;
   String cmd = Serial.readStringUntil('\n');
@@ -225,23 +227,23 @@ void handleSerialCommand() {
     readSoilSensor();
     soilDry = latestRawAdc;
     saveCalibration();
-    Serial.printf("🌵 干燥校准完成: %d\n", soilDry);
-  }
-  elseDry);
-  }
-  else if (cmd == "CAL_WET") {
+    Serial.print("CAL DRY saved: ");
+    Serial.println(soilDry);
+  } else if (cmd == "CAL_WET") {
     readSoilSensor();
     soilWet = latestRawAdc;
     saveCalibration();
-    Serial.printf("💧 湿润校准完成: %d\n", soilWet);
-  }
-  else if (cmd == "CAL_SHOW") {
-    Serial.printf("📊 当前校准: 干燥=%d, 湿润=%d\n", soilDry, soilWet);
-  }
-  else if (cmd == "CAL_RESET") {
+    Serial.print("CAL WET saved: ");
+    Serial.println(soilWet);
+  } else if (cmd == "CAL_SHOW") {
+    Serial.print("CAL: dry=");
+    Serial.print(soilDry);
+    Serial.print(" wet=");
+    Serial.println(soilWet);
+  } else if (cmd == "CAL_RESET") {
     EEPROM.put(ADDR_FLAG, 0);
     EEPROM.commit();
-    Serial.println("🔄 校准已清除，重启中...");
+    Serial.println("CAL reset, restarting...");
     delay(500);
     ESP.restart();
   }
@@ -250,40 +252,34 @@ void handleSerialCommand() {
 void setup() {
   Serial.begin(115200);
   delay(2000);
-
-  Serial.println();
   Serial.println("==============================");
-  Serial.println("ESP8266 土壤湿度传感器启动");
+  Serial.println("ESP8266 Soil Moisture Sensor");
   Serial.println("==============================");
 
   loadCalibration();
-
   pinMode(SOIL_PIN, INPUT);
-
   LoRaSerial.begin(9600);
   Serial.println("LoRaSerial OK");
-
   setLoRaMode();
-  Serial.println("LoRa 模式 OK");
+  Serial.println("LoRa mode OK");
 
   deviceId = makeDeviceId();
   topicCmd = "door/" + deviceId + "/cmd";
   topicStatus = "door/" + deviceId + "/status";
-  Serial.println("设备ID: " + deviceId);
+  Serial.print("DeviceID: ");
+  Serial.println(deviceId);
 
-  // WiFi 配网
   WiFi.disconnect(true);
   delay(100);
-
   WiFiManager wifiManager;
   wifiManager.setConfigPortalTimeout(300);
   bool wifiOk = wifiManager.autoConnect("SOIL_SENSOR_ESP8266", "12345678");
   if (!wifiOk) {
-    Serial.println("配网失败，自动重启");
+    Serial.println("Config failed, restart");
     ESP.restart();
   }
-
-  Serial.println("WiFi 配网成功，IP: " + WiFi.localIP().toString());
+  Serial.print("WiFi OK, IP: ");
+  Serial.println(WiFi.localIP().toString());
 
   WiFi.setSleepMode(WIFI_NONE_SLEEP);
   WiFi.setAutoReconnect(true);
@@ -297,13 +293,12 @@ void setup() {
   sendLoRaData();
   publishStatus(true);
 
-  Serial.println("启动完成！");
-  Serial.println("可用串口命令: CAL_DRY / CAL_WET / CAL_SHOW / CAL_RESET");
+  Serial.println("Ready. Commands: CAL_DRY / CAL_WET / CAL_SHOW / CAL_RESET");
 }
 
 void loop() {
   feedWatchdog();
-  handleSerialCommand();  // 处理串口校准命令
+  handleSerialCommand();
   checkWiFi();
 
   if (WiFi.status() == WL_CONNECTED) {
@@ -314,8 +309,6 @@ void loop() {
   }
 
   unsigned long now = millis();
-
-  // 定时采样
   if (now - lastSample >= SAMPLE_INTERVAL) {
     lastSample = now;
     readSoilSensor();
@@ -323,7 +316,6 @@ void loop() {
     if (mqttClient.connected()) publishStatus(true);
   }
 
-  // LoRa 命令处理
   if (LoRaSerial.available()) {
     String cmd = LoRaSerial.readStringUntil('\n');
     cmd.trim();
