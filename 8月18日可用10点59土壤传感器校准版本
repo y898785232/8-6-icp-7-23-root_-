@@ -98,6 +98,7 @@ void saveCalibration() {
   Serial.println(soilWet);
 }
 
+// ========== 修复后的读取函数 ==========
 void readSoilSensor() {
   long sum = 0;
   for (int i = 0; i < 5; i++) {
@@ -109,9 +110,8 @@ void readSoilSensor() {
   sensorOk = (raw > 0 && raw < 1024);
 
   if (sensorOk) {
-    int d = max(soilDry, soilWet);
-    int w = min(soilDry, soilWet);
-    float pct = map(raw, d, w, 0, 100);
+    // 修复：直接用 soilDry -> 0%, soilWet -> 100%，不再自动交换大小值
+    float pct = map(raw, soilDry, soilWet, 0, 100);
     if (pct < 0) pct = 0;
     if (pct > 100) pct = 100;
     latestMoisture = pct;
