@@ -1,0 +1,265 @@
+/*
+ * ESP8266 D1 Mini / NodeMCU 土壤湿度传感器 - door_ 协议（电容式宽电压版）
+ * 传感器：电容式土壤湿度传感器，AO 接 A0，VCC 接 3.3V，GND 接 GND
+ */
+
+#include <ESP8266WiFi.h>
+#include <WiFiClientSecure.h>
+#include <PubSubClient.h>
+#include <WiFiManager.h>
+#include <SoftwareSerial.h>
+#include <ArduinoJson.h>
+
+// ========== 引脚定义 ==========
+#define SOIL_PIN        A0          // 土壤湿度传感器模拟输出
+#define LORA_RX         D2
+#define LORA_TX         D1
+#define LORA_M0         D7
+#define LORA_M1         D6
+
+// ========== 校准参数（根据你的传感器实际调整）==========
+// 把传感器插到干燥空气中，看串口输出的 raw_adc，填到 SOIL_DRY
+// 把传感器插到水杯/湿土中，看串口输出的 raw_adc，填到 SOIL_WET
+const int SOIL_DRY = 800;   // 干燥时的 ADC 值（越大越干）
+const int SOIL_WET = 400;   // 湿润时的 ADC 值（越小越湿）
+
+SoftwareSerial LoRaSerial(LORA_RX, LORA_TX);
+
+const char* mqtt_server = "b7fea2bf.ala.asia-southeast1.emqxsl.com";
+const uint16_t mqtt_port = 8883;
+const char* mqtt_user = "eps8266nn";
+const char* mqtt_pass = "yu155414";
+
+WiFiClientSecure secureClient;
+PubSubClient mqttClient(secureClient);
+
+String deviceId;
+String topicCmd;
+String topicStatus;
+
+const unsigned long SAMPLE_INTERVAL = 60000UL;
+unsigned long lastSample = 0;
+
+float latestMoisture = 0.0;   // 湿度百分比 0-100%
+int latestRawAdc = 0;         // 原始 ADC 值
+bool sensorOk = false;
+
+// ========== 看门狗 ==========
+void feedWatchdog() {
+  #ifdef ESP8266
+    ESP.wdtFeed();
+  #endif
+}
+
+// ========== LoRa 初始化 ==========
+void setLoRaMode() {
+  pinMode(LORA_M0, OUTPUT);
+  pinMode(LORA_M1, OUTPUT);
+  digitalWrite(LORA_M0, LOW);
+  digitalWrite(LORA_M1, LOW);
+  delay(100);
+}
+
+// ========== 生成设备 ID ==========
+String makeDeviceId() {
+  return "door_" + String(ESP.getChipId(), HEX);
+}
+
+// ========== 读取土壤湿度 ==========
+void readSoilSensor() {
+  // 多次采样取平均，减少抖动
+  long sum = 0;
+  for (int i = 0; i < 5; i++) {
+    sum += analogRead(SOIL_PIN);
+    delay(5);
+  }
+  int raw = sum / 5;
+  latestRawAdc = raw;
+
+  // 检查 ADC 是否在合理范围
+  sensorOk = (raw > 0 && raw < 1024);
+
+  if (sensorOk) {
+    // 映射为百分比：干燥=0%，湿润=100%
+    // 注意：电容式传感器通常是干燥时 ADC 高，湿润时 ADC 低
+    float pct = map(raw, SOIL_DRY, SOIL_WET, 0, 100);
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    latestMoisture = pct;
+    Serial.printf("土壤湿度 raw=%d  →  %.1f%%\n", raw, pct);
+  } else {
+    Serial.printf("土壤湿度读取异常 raw=%d\n", raw);
+  }
+}
+
+// ========== 数据上报 ==========
+void publishStatus(bool online) {
+  if (!mqttClient.connected()) return;
+  StaticJsonDocument<256> doc;
+  doc["online"] = online;
+  doc["sensor_ok"] = sensorOk;
+  doc["unit"] = "%";
+  doc["raw_adc"] = latestRawAdc;
+  if (sensorOk) doc["moisture"] = latestMoisture;
+  else doc["moisture"] = nullptr;
+  char payload[300];
+  serializeJson(doc, payload);
+  mqttClient.publish(topicStatus.c_str(), payload, true);
+  Serial.printf("→ MQTT 上报: %s\n", payload);
+}
+
+void sendLoRaData() {
+  StaticJsonDocument<192> doc;
+  doc["id"] = deviceId;
+  doc["ok"] = sensorOk;
+  doc["ts"] = millis() / 1000;
+  doc["raw"] = latestRawAdc;
+  if (sensorOk) doc["moisture"] = latestMoisture;
+  else doc["moisture"] = nullptr;
+  char json[200];
+  serializeJson(doc, json);
+  LoRaSerial.println(json);
+  Serial.printf("→ LoRa 发送: %s\n", json);
+}
+
+// ========== MQTT 回调 ==========
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  char buf[64];
+  if (length >= sizeof(buf)) length = sizeof(buf) - 1;
+  memcpy(buf, payload, length);
+  buf[length] = '\0';
+  String command = String(buf);
+  command.trim();
+
+  Serial.printf("← MQTT 命令: [%s] %s\n", topic, command.c_str());
+
+  if (command == "STATUS") {
+    readSoilSensor();          // 收到命令立即读一次
+    sendLoRaData();
+    publishStatus(true);
+  }
+}
+
+// ========== MQTT 重连 ==========
+void reconnectMQTT() {
+  if (mqttClient.connected()) return;
+
+  Serial.println("连接 MQTT...");
+  secureClient.stop();
+  delay(100);
+  secureClient.setInsecure();
+  secureClient.setTimeout(10);
+  mqttClient.setServer(mqtt_server, mqtt_port);
+  mqttClient.setCallback(mqttCallback);
+
+  Serial.printf("clientId: %s\n", deviceId.c_str());
+
+  if (mqttClient.connect(deviceId.c_str(), mqtt_user, mqtt_pass)) {
+    Serial.println("MQTT 连接成功");
+    mqttClient.subscribe(topicCmd.c_str());
+    publishStatus(true);
+  } else {
+    Serial.printf("MQTT 连接失败, rc=%d\n", mqttClient.state());
+  }
+}
+
+// ========== WiFi 主动重连 ==========
+void checkWiFi() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi 断开，尝试重连...");
+    WiFi.reconnect();
+    unsigned long start = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
+      delay(100);
+      feedWatchdog();
+    }
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("WiFi 重连成功");
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(2000);
+
+  Serial.println();
+  Serial.println("==============================");
+  Serial.println("ESP8266 土壤湿度传感器启动");
+  Serial.println("==============================");
+
+  pinMode(SOIL_PIN, INPUT);
+
+  LoRaSerial.begin(9600);
+  Serial.println("LoRaSerial OK");
+
+  setLoRaMode();
+  Serial.println("LoRa 模式 OK");
+
+  deviceId = makeDeviceId();
+  topicCmd = "door/" + deviceId + "/cmd";
+  topicStatus = "door/" + deviceId + "/status";
+  Serial.println("设备ID: " + deviceId);
+
+  // WiFi 配网
+  WiFi.disconnect(true);
+  delay(100);
+
+  WiFiManager wifiManager;
+  wifiManager.setConfigPortalTimeout(300);
+  bool wifiOk = wifiManager.autoConnect("SOIL_SENSOR_ESP8266", "12345678");
+  if (!wifiOk) {
+    Serial.println("配网失败，自动重启");
+    ESP.restart();
+  }
+
+  Serial.println("WiFi 配网成功，IP: " + WiFi.localIP().toString());
+
+  WiFi.setSleepMode(WIFI_NONE_SLEEP);
+  WiFi.setAutoReconnect(true);
+
+  reconnectMQTT();
+  Serial.println("MQTT init OK");
+
+  // 首次读取
+  readSoilSensor();
+  sendLoRaData();
+  if (mqttClient.connected()) publishStatus(true);
+
+  lastSample = millis();
+  Serial.println("启动完成！");
+}
+
+void loop() {
+  feedWatchdog();
+  checkWiFi();
+
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!mqttClient.connected()) {
+      reconnectMQTT();
+    }
+    mqttClient.loop();
+  }
+
+  unsigned long now = millis();
+
+  // 定时采样（60 秒一次）
+  if (now - lastSample >= SAMPLE_INTERVAL) {
+    lastSample = now;
+    readSoilSensor();
+    sendLoRaData();
+    if (mqttClient.connected()) publishStatus(true);
+  }
+
+  // LoRa 命令处理
+  if (LoRaSerial.available()) {
+    String cmd = LoRaSerial.readStringUntil('\n');
+    cmd.trim();
+    if (cmd.indexOf("STATUS") != -1) {
+      readSoilSensor();
+      sendLoRaData();
+    }
+  }
+
+  delay(10);
+}
