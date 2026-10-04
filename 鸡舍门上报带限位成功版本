@@ -1,0 +1,340 @@
+/*
+ * ESP8266 鸡舍控制器（无 LoRa 版）
+ * 功能：WiFi + MQTT + 电机正反转 + 双限位 + caps 能力上报
+ * 限位：D4=开门到位，D6=关门到位（按下=LOW）
+ * 超时：20秒
+ * 版本：1.7.1-D6-debug
+ */
+
+#include <ESP8266WiFi.h>
+#include <PubSubClient.h>
+#include <WiFiManager.h>
+#include <ESP8266HTTPClient.h>
+#include <ESP8266httpUpdate.h>
+#include <ArduinoJson.h>
+#include <time.h>
+
+// ==================== 引脚定义 ====================
+#define MOTOR_OPEN      D1
+#define MOTOR_CLOSE     D2
+
+#define LIMIT_OPEN      D4      // 开门到位
+#define LIMIT_CLOSE     D6      // 关门到位【改为D6】
+
+#define RESET_BUTTON    0
+
+// ==================== 固件/型号 ====================
+const char* FIRMWARE_VER = "1.7.1-D6-debug";
+const char* DEVICE_MODEL = "jishe-motor";
+
+// ==================== MQTT ====================
+const char* mqtt_server = "b7fea2bf.ala.asia-southeast1.emqxsl.com";
+const int   mqtt_port   = 8883;
+const char* mqtt_user   = "eps8266nn";
+const char* mqtt_pass   = "yu155414";
+
+String deviceId;
+char   mqttClientId[32];
+char   mqtt_status_topic_buf[64];
+char   mqtt_cmd_topic_buf[64];
+char   mqtt_hello_topic_buf[64];
+
+const String firmware_url = "http://esp8266-yuyu-ota.oss-cn-hangzhou.aliyuncs.com/firmware_door5.bin";
+
+// ==================== 电机控制 ====================
+const unsigned long MOTOR_RUN_MS = 20000UL;
+bool motorRunning = false;
+unsigned long motorStartTime = 0;
+int  motorDirection = 0;
+
+unsigned long lastLimitCheck = 0;
+const unsigned long LIMIT_DEBOUNCE_MS = 30;
+
+unsigned long lastHeartbeat = 0;
+const unsigned long HEARTBEAT_INTERVAL = 300000UL;
+
+unsigned long lastReconnectAttempt = 0;
+const unsigned long RECONNECT_INTERVAL = 5000UL;
+
+bool ota_requested = false;
+
+WiFiClientSecure espClient;
+PubSubClient mqttClient(espClient);
+
+void mqttCallback(char* topic, byte* payload, unsigned int length);
+void startRemoteOTA();
+void publishAllStatuses();
+void sendHello();
+void motorOpen();
+void motorClose();
+void motorStop();
+void checkLimits();
+
+void motorStop() {
+  digitalWrite(MOTOR_OPEN, LOW);
+  digitalWrite(MOTOR_CLOSE, LOW);
+  motorRunning = false;
+  motorDirection = 0;
+  Serial.println("电机停止");
+}
+
+void motorOpen() {
+  digitalWrite(MOTOR_CLOSE, LOW);
+  delay(40);
+  digitalWrite(MOTOR_OPEN, HIGH);
+  motorRunning = true;
+  motorDirection = 1;
+  motorStartTime = millis();
+  Serial.println("电机正转（开门）");
+}
+
+void motorClose() {
+  digitalWrite(MOTOR_OPEN, LOW);
+  delay(40);
+  digitalWrite(MOTOR_CLOSE, HIGH);
+  motorRunning = true;
+  motorDirection = 2;
+  motorStartTime = millis();
+  Serial.println("电机反转（关门）");
+}
+
+void checkLimits() {
+  if (!motorRunning) return;
+  if (millis() - lastLimitCheck < LIMIT_DEBOUNCE_MS) return;
+  lastLimitCheck = millis();
+
+  if (motorDirection == 1 && digitalRead(LIMIT_OPEN) == LOW) {
+    motorStop();
+    Serial.println("开门限位触发，已停止");
+    if (mqttClient.connected()) {
+      mqttClient.publish(mqtt_status_topic_buf, "MOTOR_OPEN_LIMIT");
+    }
+  }
+
+  if (motorDirection == 2 && digitalRead(LIMIT_CLOSE) == LOW) {
+    motorStop();
+    Serial.println("关门限位触发，已停止");
+    if (mqttClient.connected()) {
+      mqttClient.publish(mqtt_status_topic_buf, "MOTOR_CLOSE_LIMIT");
+    }
+  }
+}
+
+void sendHello() {
+  if (!mqttClient.connected()) return;
+
+  JsonDocument doc;
+  doc["id"]     = deviceId;
+  doc["type"]   = "controller";
+  doc["name"]   = "鸡舍";
+  doc["model"]  = DEVICE_MODEL;
+  doc["fw"]     = FIRMWARE_VER;
+  doc["online"] = true;
+
+  JsonArray commands = doc["commands"].to<JsonArray>();
+  const char* cmds[] = {
+    "OPEN", "CLOSE", "STOP",
+    "STATUS", "WHO_IS_ONLINE", "GET_CAPS", "WHO_AM_I", "HELLO",
+    "DO_OTA_UPDATE"
+  };
+  for (unsigned i = 0; i < sizeof(cmds) / sizeof(cmds[0]); i++) {
+    commands.add(cmds[i]);
+  }
+
+  JsonArray caps = doc["caps"].to<JsonArray>();
+  JsonObject door = caps.add<JsonObject>();
+  door["id"]    = "gate";
+  door["type"]  = "cover";
+  door["name"]  = "鸡舍门";
+  door["open"]  = "OPEN";
+  door["stop"]  = "STOP";
+  door["close"] = "CLOSE";
+
+  char payload[768];
+  size_t n = serializeJson(doc, payload, sizeof(payload));
+  if (n == 0 || n >= sizeof(payload)) {
+    Serial.println("caps JSON 失败或过长");
+    return;
+  }
+
+  mqttClient.publish(mqtt_hello_topic_buf, payload, true);
+  mqttClient.publish("home/discovery", payload, true);
+  mqttClient.publish(mqtt_status_topic_buf, payload, false);
+
+  Serial.println("→ 已发送 caps / hello");
+  Serial.println(payload);
+}
+
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  String msg = "";
+  for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
+  msg.trim();
+  msg.toUpperCase();
+  Serial.print("MQTT收到命令: ");
+  Serial.println(msg);
+
+  if (msg == "OPEN") {
+    motorOpen();
+    mqttClient.publish(mqtt_status_topic_buf, "MOTOR_OPEN");
+  } else if (msg == "CLOSE") {
+    motorClose();
+    mqttClient.publish(mqtt_status_topic_buf, "MOTOR_CLOSE");
+  } else if (msg == "STOP") {
+    motorStop();
+    mqttClient.publish(mqtt_status_topic_buf, "MOTOR_STOP");
+  } else if (msg == "DO_OTA_UPDATE") {
+    ota_requested = true;
+  } else if (msg == "WHO_IS_ONLINE" || msg == "STATUS") {
+    publishAllStatuses();
+  } else if (msg == "GET_CAPS" || msg == "WHO_AM_I" || msg == "HELLO") {
+    sendHello();
+  }
+}
+
+void publishAllStatuses() {
+  if (!mqttClient.connected()) return;
+
+  String onlineMsg = "ONLINE_" + deviceId;
+  mqttClient.publish(mqtt_status_topic_buf, onlineMsg.c_str());
+
+  if (motorDirection == 1) {
+    mqttClient.publish(mqtt_status_topic_buf, "MOTOR_OPEN");
+  } else if (motorDirection == 2) {
+    mqttClient.publish(mqtt_status_topic_buf, "MOTOR_CLOSE");
+  } else {
+    mqttClient.publish(mqtt_status_topic_buf, "MOTOR_STOP");
+  }
+  lastHeartbeat = millis();
+}
+
+void startRemoteOTA() {
+  Serial.println("开始远程OTA升级...");
+  mqttClient.publish(mqtt_status_topic_buf, "OTA_START");
+
+  WiFiClient client;
+  ESPhttpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  t_httpUpdate_return ret = ESPhttpUpdate.update(client, firmware_url);
+
+  switch (ret) {
+    case HTTP_UPDATE_OK:
+      mqttClient.publish(mqtt_status_topic_buf, "OTA_OK");
+      delay(1500);
+      ESP.restart();
+      break;
+    case HTTP_UPDATE_FAILED:
+      mqttClient.publish(mqtt_status_topic_buf, "OTA_FAIL");
+      break;
+    case HTTP_UPDATE_NO_UPDATES:
+      mqttClient.publish(mqtt_status_topic_buf, "OTA_NO_NEW");
+      break;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(100);
+
+  pinMode(MOTOR_OPEN, OUTPUT);
+  pinMode(MOTOR_CLOSE, OUTPUT);
+  digitalWrite(MOTOR_OPEN, LOW);
+  digitalWrite(MOTOR_CLOSE, LOW);
+
+  pinMode(LIMIT_OPEN, INPUT_PULLUP);
+  pinMode(LIMIT_CLOSE, INPUT_PULLUP);   // D6
+
+  pinMode(RESET_BUTTON, INPUT_PULLUP);
+
+  uint32_t chipId = ESP.getChipId();
+  deviceId = "ESP_" + String(chipId, HEX);
+  deviceId.toUpperCase();
+  snprintf(mqttClientId, sizeof(mqttClientId), "ESP8266_%08X", chipId);
+  snprintf(mqtt_status_topic_buf, sizeof(mqtt_status_topic_buf), "home/esp8266/status/%s", deviceId.c_str());
+  snprintf(mqtt_cmd_topic_buf, sizeof(mqtt_cmd_topic_buf), "home/esp8266/cmd/%s", deviceId.c_str());
+  snprintf(mqtt_hello_topic_buf, sizeof(mqtt_hello_topic_buf), "home/esp8266/hello/%s", deviceId.c_str());
+
+  Serial.println("设备ID: " + deviceId);
+  Serial.println("限位: D4=开门到位, D6=关门到位");
+
+  WiFiManager wifiManager;
+  wifiManager.setTimeout(30);
+  if (!wifiManager.autoConnect("ESP_Smart_Home")) {
+    Serial.println("WiFi连接超时，继续运行本地功能");
+  }
+
+  configTime(28800, 0, "ntp.aliyun.com", "pool.ntp.org");
+  Serial.println("北京时间同步启动");
+
+  espClient.setInsecure();
+  mqttClient.setServer(mqtt_server, mqtt_port);
+  mqttClient.setCallback(mqttCallback);
+  mqttClient.setBufferSize(1024);
+  mqttClient.setKeepAlive(30);
+
+  Serial.println("系统初始化完成！");
+}
+
+void loop() {
+  // ===== 调试打印 =====
+  static unsigned long lastPrint = 0;
+  if (millis() - lastPrint > 1000) {
+    lastPrint = millis();
+    Serial.printf("D4(开)=%d  D6(关)=%d  方向=%d  运行=%d\n",
+                  digitalRead(LIMIT_OPEN),
+                  digitalRead(LIMIT_CLOSE),
+                  motorDirection,
+                  motorRunning);
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!mqttClient.connected()) {
+      if (millis() - lastReconnectAttempt >= RECONNECT_INTERVAL) {
+        lastReconnectAttempt = millis();
+        Serial.println("MQTT尝试重连...");
+        if (mqttClient.connect(mqttClientId, mqtt_user, mqtt_pass)) {
+          mqttClient.subscribe(mqtt_cmd_topic_buf);
+          Serial.println("MQTT重连成功，已订阅命令主题");
+          publishAllStatuses();
+          sendHello();
+        } else {
+          Serial.printf("MQTT重连失败，状态码: %d\n", mqttClient.state());
+        }
+      }
+    }
+    mqttClient.loop();
+  }
+
+  checkLimits();
+
+  if (motorRunning && (millis() - motorStartTime >= MOTOR_RUN_MS)) {
+    motorStop();
+    if (mqttClient.connected()) {
+      mqttClient.publish(mqtt_status_topic_buf, "MOTOR_STOP");
+    }
+    Serial.println("电机超时停止");
+  }
+
+  if (millis() - lastHeartbeat >= HEARTBEAT_INTERVAL) {
+    if (mqttClient.connected()) publishAllStatuses();
+  }
+
+  if (ota_requested) {
+    ota_requested = false;
+    startRemoteOTA();
+  }
+
+  static unsigned long resetPressTime = 0;
+  static bool resetTriggered = false;
+  if (digitalRead(RESET_BUTTON) == LOW) {
+    if (resetPressTime == 0) resetPressTime = millis();
+    if (!resetTriggered && millis() - resetPressTime >= 3000) {
+      resetTriggered = true;
+      Serial.println("长按FLASH键重置WiFi...");
+      WiFiManager wm;
+      wm.resetSettings();
+      ESP.restart();
+    }
+  } else {
+    resetPressTime = 0;
+    resetTriggered = false;
+  }
+}
